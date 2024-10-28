@@ -8,14 +8,26 @@ import pygame
 from pygame.locals import *
 import serial
 
+
+class Axes:
+    def __init__(self, x: float = 0.0, y: float = 0.0, z: float = 0.0):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def update(self, x: float = None, y: float = None, z: float = None):
+        self.x = float(x) if x else self.x
+        self.y = float(y) if y else self.y
+        self.z = float(z) if z else self.z
+
+
+# Global variables
 ser = serial.Serial("COM4", 38400, timeout=3)
-
-ax0, ay0, az0 = 0, 0, 0
-ax1, ay1, az1 = 0, 0, 0
 yaw_mode = False
+obj0, obj1 = Axes(), Axes()
 
 
-def resize(width, height):
+def resize_window(width, height):
     height = 1 if not height else height
     glViewport(0, 0, width, height)
     glMatrixMode(GL_PROJECTION)
@@ -25,7 +37,7 @@ def resize(width, height):
     glLoadIdentity()
 
 
-def init():
+def gl_env_init():
     glShadeModel(GL_SMOOTH)
     glClearColor(0.0, 0.0, 0.0, 0.0)
     glClearDepth(1.0)
@@ -93,9 +105,13 @@ def draw():
     global rquad
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-    osd_line = (
-        f"Object1 -- pitch: {ay0:.2f}, roll: {ax0:.2f} {f", yaw: {az0:.2f}" if yaw_mode else ''}\n"
-        + f"Object2 -- pitch: {ay1:.2f}, roll: {ax1:.2f} {f", yaw: {az1:.2f}" if yaw_mode else ''}"
+    drawText(
+        (-2, -2, -7.0),
+        f"Object1 -- pitch: {obj0.y:.2f}, roll: {obj0.x:.2f} {f', yaw: {obj0.z:.2f}' if yaw_mode else ''}",
+    )
+    drawText(
+        (-2, -2.2, -7.0),
+        f"Object2 -- pitch: {obj1.y:.2f}, roll: {obj1.x:.2f} {f', yaw: {obj1.z:.2f}' if yaw_mode else ''}",
     )
 
     ##################
@@ -107,16 +123,16 @@ def draw():
 
     # BEGIN Rotate based on serialcomm
     if yaw_mode:
-        glRotatef(az0, 0.0, 1.0, 0.0)  # Yaw,   rotate around y-axis
+        glRotatef(obj0.z, 0.0, 1.0, 0.0)  # Yaw,   rotate around y-axis
     else:
         glRotatef(0.0, 0.0, 1.0, 0.0)
-    glRotatef(ay0, 1.0, 0.0, 0.0)  # Pitch, rotate around x-axis
-    glRotatef(-1 * ax0, 0.0, 0.0, 1.0)  # Roll,  rotate around z-axis
+    glRotatef(obj0.y, 1.0, 0.0, 0.0)  # Pitch, rotate around x-axis
+    glRotatef(-1 * obj0.x, 0.0, 0.0, 1.0)  # Roll,  rotate around z-axis
     # END Rotate based on serialcomm
 
     prism()  # create a rectangular prism at the position specified by the transformation matrix
     glPopMatrix()  # delete object 2's transformation matrix
-    drawText((-1.5, 1.2, -7.0), "Prism 1")  # label
+    drawText((-2, 1.2, -7.0), "Prism 1")  # label
 
     ##################
     ###  OBJECT 2  ###
@@ -127,22 +143,21 @@ def draw():
 
     # BEGIN Rotate based on serialcomm
     if yaw_mode:
-        glRotatef(az1, 0.0, 1.0, 0.0)  # Yaw,   rotate around y-axis
+        glRotatef(obj1.z, 0.0, 1.0, 0.0)  # Yaw,   rotate around y-axis
     else:
         glRotatef(0.0, 0.0, 1.0, 0.0)
 
-    glRotatef(ay1, 1.0, 0.0, 0.0)  # Pitch, rotate around x-axis
-    glRotatef(-1 * ax1, 0.0, 0.0, 1.0)  # Roll,  rotate around z-axis
+    glRotatef(obj1.y, 1.0, 0.0, 0.0)  # Pitch, rotate around x-axis
+    glRotatef(-1 * obj1.x, 0.0, 0.0, 1.0)  # Roll,  rotate around z-axis
     # END Rotate based on serialcomm
 
     prism()  # create a rectangular prism at the position specified by the transformation matrix
     glPopMatrix()  # delete object 2's transformation matrix
     drawText((1.5, 1.2, -7.0), "Prism 2")  # label
-    drawText((-2, -2, 2), osd_line)  # numerical imu data
 
 
 def read_data():
-    global ax0, ay0, az0, ax1, ay1, az1
+    global obj0, obj1
 
     # request data by sending a dot
     ser.write(b".")  # * encode string to bytes
@@ -150,12 +165,8 @@ def read_data():
     angles = line.split(b", ")
 
     if len(angles) == 6:
-        ax0 = float(angles[0])
-        ay0 = float(angles[1])
-        az0 = float(angles[2])
-        ax1 = float(angles[3])
-        ay1 = float(angles[4])
-        az1 = float(angles[5])
+        obj0.update(*angles[:3])
+        obj1.update(*angles[3:])
 
 
 def main():
@@ -166,10 +177,8 @@ def main():
     pygame.init()
     screen = pygame.display.set_mode((1280, 720), video_flags)
     pygame.display.set_caption("Press Esc to quit, z toggles yaw mode")
-    resize(1280, 720)
-    init()
-    frames = 0
-    ticks = pygame.time.get_ticks()
+    resize_window(1280, 720)
+    gl_env_init()
 
     while True:
         event = pygame.event.poll()
@@ -184,9 +193,6 @@ def main():
         draw()
 
         pygame.display.flip()
-        frames += 1
-
-    print("fps:  %d" % ((frames * 1000) / (pygame.time.get_ticks() - ticks)))
 
     ser.close()
 
