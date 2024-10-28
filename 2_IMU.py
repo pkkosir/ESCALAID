@@ -2,6 +2,8 @@
 
 from OpenGL.GL import *
 from OpenGL.GLU import *
+from OpenGL.GLUT import *
+# from OpenGL.GLUT import glutSwapBuffers as swap_buffers
 import pygame
 from pygame.locals import *
 import serial
@@ -33,39 +35,7 @@ def init():
     glDepthFunc(GL_LEQUAL)
     glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST)
 
-def drawText(position, textString):     
-    font = pygame.font.SysFont ("Courier", 18, True)
-    textSurface = font.render(textString, True, (255,255,255,255), (0,0,0,255))     
-    textData = pygame.image.tostring(textSurface, "RGBA", True)     
-    glRasterPos3d(*position)     
-    glDrawPixels(textSurface.get_width(), textSurface.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, textData)
-
-def draw():
-    global rquad
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);	
-    
-    glLoadIdentity()
-    glTranslatef(0,0.0,-7.0)
-
-    osd_text = "pitch: " + str("{0:.2f}".format(ay)) + ", roll: " + str("{0:.2f}".format(ax)) + ", roll_1: " + str("{0:.2f}".format(ax_1))
-
-
-    if yaw_mode:
-        osd_line = osd_text + ", yaw: " + str("{0:.2f}".format(az))
-    else:
-        osd_line = osd_text
-
-    drawText((-2,-2, 2), osd_line)
-
-    # the way I'm holding the IMU board, X and Y axis are switched 
-    # with respect to the OpenGL coordinate system
-    if yaw_mode:                             # experimental
-        glRotatef(az, 0.0, 1.0, 0.0)  # Yaw,   rotate around y-axis
-    else:
-        glRotatef(0.0, 0.0, 1.0, 0.0)
-    glRotatef(ay ,1.0,0.0,0.0)        # Pitch, rotate around x-axis
-    glRotatef(-1*ax ,0.0,0.0,1.0)     # Roll,  rotate around z-axis
-
+def prism() -> None:
     glBegin(GL_QUADS)	
     glColor3f(0.0,1.0,0.0)
     glVertex3f( 1.0, 0.2,-1.0)
@@ -103,6 +73,70 @@ def draw():
     glVertex3f( 1.0,-0.2, 1.0)		
     glVertex3f( 1.0,-0.2,-1.0)		
     glEnd()	
+
+def drawText(position, textString):     
+    font = pygame.font.SysFont ("Courier", 18, True)
+    textSurface = font.render(textString, True, (255,255,255,255), (0,0,0,255))     
+    textData = pygame.image.tostring(textSurface, "RGBA", True)     
+    glRasterPos3d(*position)     
+    glDrawPixels(textSurface.get_width(), textSurface.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, textData)
+
+def draw():
+    global rquad
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);	
+    
+
+    #osd_text = "pitch: " + str("{0:.2f}".format(ay)) + ", roll: " + str("{0:.2f}".format(ax)) + ", roll_1: " + str("{0:.2f}".format(ax_1))
+    # if yaw_mode:
+    #     osd_line = osd_text + ", yaw: " + str("{0:.2f}".format(az))
+    # else:
+    #    osd_line = osd_text
+
+    
+    ##################
+    ###  OBJECT 1  ###
+    ##################
+    glLoadIdentity()  # resets the coordinate plane
+    glPushMatrix()  # create object 1's transformation matrix
+    glTranslatef(-2, 0, -7.0)  # translate base to left side of environment from origin
+    
+    # BEGIN Rotate based on serialcomm
+    if yaw_mode:
+        glRotatef(az, 0.0, 1.0, 0.0)  # Yaw,   rotate around y-axis
+
+    else:
+        glRotatef(0.0, 0.0, 1.0, 0.0)
+    glRotatef(ay ,1.0,0.0,0.0)        # Pitch, rotate around x-axis
+    glRotatef(-1*ax ,0.0,0.0,1.0)     # Roll,  rotate around z-axis
+	# END Rotate based on serialcomm
+
+    prism()  # create a rectangular prism at the position specified by the transformation matrix
+    glPopMatrix()  # delete object 2's transformation matrix
+    drawText((-1.5, 1.2,-7.0), "Prism 1")  # label
+
+    ##################
+    ###  OBJECT 2  ###
+    ##################
+    glLoadIdentity()  # resets the coordinate plane
+    glPushMatrix()  # create object 2's transformation matrix
+    glTranslatef(2, 0, -7.0)  # translate base to right side of environment from origin
+
+    # BEGIN Rotate based on serialcomm
+    if yaw_mode:
+        glRotatef(az_1, 0.0, 1.0, 0.0)  # Yaw,   rotate around y-axis
+    else:
+        glRotatef(0.0, 0.0, 1.0, 0.0)
+
+    glRotatef(ay_1 ,1.0,0.0,0.0)        # Pitch, rotate around x-axis
+    glRotatef(-1*ax_1 ,0.0,0.0,1.0)     # Roll,  rotate around z-axis
+	# END Rotate based on serialcomm
+
+    prism()  # create a rectangular prism at the position specified by the transformation matrix
+    glPopMatrix()  # delete object 2's transformation matrix
+    drawText((1.5, 1.2,-7.0), "Prism 2")  # label
+    osd_line = f"Object1 -- pitch: {ay:.2f}, roll: {ax:.2f} {f", yaw: {az:.2f}" if yaw_mode else ''}"
+
+
          
 def read_data():
     global ax, ay, az, ax_1, ay_1, az_1
@@ -129,7 +163,7 @@ def read_data():
         ay_1 = float(angles[4])
         az_1 = float(angles[5])
         line_done = 1 
-    print(ax, ay, az, ax_1, ay_1, az_1)
+    # print(ax, ay, az, ax_1, ay_1, az_1)
     #if len(angles_1) == 3:    
     #    ax_1 = float(angles_1[0])
     #    ay_1 = float(angles_1[1])
@@ -142,9 +176,9 @@ def main():
     video_flags = OPENGL|DOUBLEBUF
     
     pygame.init()
-    screen = pygame.display.set_mode((640,480), video_flags)
+    screen = pygame.display.set_mode((1280,720), video_flags)
     pygame.display.set_caption("Press Esc to quit, z toggles yaw mode")
-    resize(640,480)
+    resize(1280,720)
     init()
     frames = 0
     ticks = pygame.time.get_ticks()
