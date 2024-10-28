@@ -113,6 +113,11 @@ def draw():
         (-2, -2.2, -7.0),
         f"Object2 -- pitch: {obj1.y:.2f}, roll: {obj1.x:.2f} {f', yaw: {obj1.z:.2f}' if yaw_mode else ''}",
     )
+    drawText(
+        (-2, -1.8, -7.0),
+        f"Degree of Knee: {180-(abs(obj1.x)+abs(obj0.x)):.2f}"
+    )
+    
 
     ##################
     ###  OBJECT 1  ###
@@ -127,12 +132,12 @@ def draw():
     else:
         glRotatef(0.0, 0.0, 1.0, 0.0)
     glRotatef(obj0.y, 1.0, 0.0, 0.0)  # Pitch, rotate around x-axis
-    glRotatef(-1 * obj0.x, 0.0, 0.0, 1.0)  # Roll,  rotate around z-axis
+    glRotatef(obj0.x, 0.0, 0.0, 1.0)  # Roll,  rotate around z-axis
     # END Rotate based on serialcomm
 
     prism()  # create a rectangular prism at the position specified by the transformation matrix
     glPopMatrix()  # delete object 2's transformation matrix
-    drawText((-2, 1.2, -7.0), "Prism 1")  # label
+    drawText((-2, 1.2, -7.0), "IMU 1")  # label
 
     ##################
     ###  OBJECT 2  ###
@@ -148,12 +153,12 @@ def draw():
         glRotatef(0.0, 0.0, 1.0, 0.0)
 
     glRotatef(obj1.y, 1.0, 0.0, 0.0)  # Pitch, rotate around x-axis
-    glRotatef(-1 * obj1.x, 0.0, 0.0, 1.0)  # Roll,  rotate around z-axis
+    glRotatef(obj1.x, 0.0, 0.0, 1.0)  # Roll,  rotate around z-axis
     # END Rotate based on serialcomm
 
     prism()  # create a rectangular prism at the position specified by the transformation matrix
     glPopMatrix()  # delete object 2's transformation matrix
-    drawText((1.5, 1.2, -7.0), "Prism 2")  # label
+    drawText((1.5, 1.2, -7.0), "IMU 2")  # label
 
 
 def read_data():
