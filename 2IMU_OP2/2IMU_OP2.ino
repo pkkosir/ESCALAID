@@ -50,16 +50,16 @@ void setup()
   // PWR_MGMT_1:
   // wake up 
   i2c_write_reg (MPU6050_I2C_ADDRESS, 0x6b, 0x00);
-  Serial.println("ADD1 WRITE1");
+  // Serial.println("ADD1 WRITE1");
   // CONFIG:
   // Low pass filter samples, 1khz sample rate
   i2c_write_reg (MPU6050_I2C_ADDRESS, 0x1a, 0x01);
-  Serial.println("ADD1 WRITE2");
+  // Serial.println("ADD1 WRITE2");
   // GYRO_CONFIG:
   // 500 deg/s, FS_SEL=1
   // This means 65.5 LSBs/deg/s
   i2c_write_reg(MPU6050_I2C_ADDRESS, 0x1b, 0x08);
-  Serial.println("ADD1 WRITE3"); 
+  // Serial.println("ADD1 WRITE3"); 
   // CONFIG:
   // set sample rate
   // sample rate FREQ = Gyro sample rate / (sample_div + 1)
@@ -67,19 +67,19 @@ void setup()
   // reg_value = 1khz/FREQ - 1
   sample_div = 1000 / FREQ - 1;
   i2c_write_reg (MPU6050_I2C_ADDRESS, 0x19, sample_div);
-  Serial.println("ADD1 WRITE4");
+  // Serial.println("ADD1 WRITE4");
 
 
 
   
   i2c_write_reg (MPU6050_I2C_ADDRESS_1, 0x6b, 0x00);//Ram
-  Serial.println("ADD2 WRITE1");
+  // Serial.println("ADD2 WRITE1");
   i2c_write_reg (MPU6050_I2C_ADDRESS_1, 0x1a, 0x01);//Ram
-  Serial.println("ADD2 WRITE2");
+  // Serial.println("ADD2 WRITE2");
   i2c_write_reg(MPU6050_I2C_ADDRESS_1, 0x1b, 0x08); //Ram
-  Serial.println("ADD2 WRITE3");
+  // Serial.println("ADD2 WRITE3");
   i2c_write_reg (MPU6050_I2C_ADDRESS_1, 0x19, sample_div); //Ram
-  Serial.println("ADD WRITE4");
+  // Serial.println("ADD WRITE4");
 
 
 //  Serial.write("Calibrating...");
@@ -130,9 +130,9 @@ void loop()
   gx_1 = gx_1 * 0.96 + ax_1 * 0.04;
   gy_1 = gy_1 * 0.96 + ay_1 * 0.04;
 
-  Serial.println(ax,2);
-  Serial.println("INBET");
-  Serial.println(ax_1,2);
+  //Serial.println(ax,2);
+  //Serial.println("INBET");
+  //Serial.println(ax_1,2);
 
   // check if there is some kind of request 
   // from the other side...
@@ -332,7 +332,7 @@ int i2c_write(int addr, int start, const uint8_t *pData, int size)
   error = Wire.endTransmission(true); // release the I2C-bus
   if (error != 0)
   return (error);
-  Serial.println("ENTERS THIS FUNC");
+  //Serial.println("ENTERS THIS FUNC");
   return (0);         // return : no error
 }
 

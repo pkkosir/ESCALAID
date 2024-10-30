@@ -13,7 +13,7 @@ class Axes:
         self.z = float(z) if z else self.z
 
 
-ser = serial.Serial("COM3", 38400, timeout=3)
+ser = serial.Serial("COM3", 38400, timeout=0.1)
 yaw_mode = False
 obj0, obj1 = Axes(), Axes()
 
@@ -23,12 +23,17 @@ def read_data():
     ser.write(b".")  # * encode string to bytes
     line = ser.readline()
     angles = line.split(b", ")
-    return angles
+    return line
 
     # if len(angles) == 6:
     #     obj0.update(*angles[:3])
     #     obj1.update(*angles[3:])
 
 while(1):
-    time.sleep(0.2)
-    print(read_data())
+    values = [float(i.strip()) for i in read_data().decode('utf-8').split(',') if i]
+    if len(values) == 6:
+        print("IMU 1")
+        print(f"roll (x): {values[0]}, pitch (y): {values[1]}, yaw (z): {values[2]}")
+        print("IMU 2")
+        print(f"roll (x): {values[3]}, pitch (y): {values[4]}, yaw (z): {values[5]}")
+        print()
