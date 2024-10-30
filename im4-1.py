@@ -14,7 +14,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.iter_x = 0
         self.resolution = 100
 
-        self.figure = pg.PlotWidget()
+        self.figure = pg.PlotWidget(title="Pitch, roll, yaw")
         self.setCentralWidget(self.figure)
 
         self.x = list(range(self.resolution))
@@ -53,7 +53,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # return values[:3] if imuNum == 1 else values[3:]
             return values[0:3]  # just x for now
         else:
-            return 0
+            return (0, 0, 0)
 
     def update_plot_data(self):
         self.x = self.x[1:]  # Remove the first y element.
