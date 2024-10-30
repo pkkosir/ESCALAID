@@ -18,12 +18,13 @@ class Axes:
 ser = serial.Serial("COM3", 38400, timeout=0.1)
 x = 0
 fig, ax = plt.subplots()
-ax.set_xlim(0, 20)
+ax.set_xlim(0, 100)
 ax.set_ylim(-180, 180)
 
 x_data = []
-y_data = []
-line, = ax.plot(x_data, y_data)
+roll_data, pitch_data = [], []
+roll, = ax.plot(x_data, roll_data, animated=True)
+pitch, = ax.plot(x_data, pitch_data, animated=True)
 
 
 def read_data():
@@ -33,52 +34,50 @@ def read_data():
     angles = line.split(b", ")
     return line
 
-    # if len(angles) == 6:
-    #     obj0.update(*angles[:3])
-    #     obj1.update(*angles[3:])
 
+def get_position():
+    #values = [float(i.strip()) for i in read_data().decode('utf-8').split(',') if i]
+    data = read_data().decode("utf-8").split(",")
+    if len(data) == 6:
 
-def get_position(imuNum: int):
-        values = [float(i.strip()) for i in read_data().decode('utf-8').split(',') if i]
-        if len(values) == 6:
-            imu_1 = Axes(*values[:3])
-            imu_2 = Axes(*values[3:])
+        # print("IMU 1")
+        # print(f"roll (x): {imu_1.x}, pitch (y): {imu_1.y}, yaw (z): {imu_1.z}")
+        # print("IMU 2")
+        # print(f"roll (x): {imu_2.x}, pitch (y): {imu_2.y}, yaw (z): {imu_2.z}")
+        # print()
 
-            print("IMU 1")
-            print(f"roll (x): {imu_1.x}, pitch (y): {imu_1.y}, yaw (z): {imu_1.z}")
-            print("IMU 2")
-            print(f"roll (x): {imu_2.x}, pitch (y): {imu_2.y}, yaw (z): {imu_2.z}")
-            print()
+        # return values[:3] if imuNum == 1 else values[3:]
+        return float(data[0]), float(data[1])  # just x for now
+    else:
+        return 0
 
-            # return values[:3] if imuNum == 1 else values[3:]
-            return imu_1.x if imuNum == 1 else imu_2.x  # just x for now
-        else:
-            return 0
 
 def update(frame):
     # Assuming data is a single float value for y-axis
     global x
     precision = 20
-    y = get_position(1)
-    print(y)
+    y_roll, y_pitch = get_position()
+    print(f"roll {roll}, pitch {pitch}")
     x_data.append(x)
-    y_data.append(y)
+    roll_data.append(y_roll)
+    pitch_data.append(y_pitch)
 
     # Keep only the last 100 points to avoid memory issues
     x_data[:] = x_data[-precision:]
-    y_data[:] = y_data[-precision:]
+    roll_data[:] = roll_data[-precision:]
+    pitch_data[:] = pitch_data[-precision:]
 
     # Update plot data
-    line.set_data(x_data, y_data)
+    roll.set_data(x_data, roll_data)
+    pitch.set_data(x_data, pitch_data)
     ax.set_xlim(max(0, x - precision), x)  # Slide the x-axis
-    # ax.set_ylim(min(-2, min(y_data)), max(2, max(y_data)))  # stretch y axis
     # print(x_data)
     # print(y_data)
     x+=1
-    return line
+    return roll, pitch
 
 
-ani = FuncAnimation(fig, update, interval=200, cache_frame_data=False)
+ani = FuncAnimation(fig, update, init_func=lambda: (roll, pitch), interval=100, blit=True, cache_frame_data=True)
 plt.show()
 #
 # while(1):
