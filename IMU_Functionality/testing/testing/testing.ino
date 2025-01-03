@@ -2,18 +2,24 @@
   #include <MPU6050.h>
   #include <math.h>
 
-  MPU6050 mpu;
+  MPU6050 mpu1;
+  MPU6050 mpu2(0x69); // Second MPU6050 with address 0x69
 
-  // Variables to hold accelerometer and gyroscope data
-  float accelX, accelY, accelZ;
-  float gyroX, gyroY, gyroZ;
+  #define BAUDRATE 9600 // Defines baudrate for quick changes
+
+
+  // Variables to hold accelerometer and gyroscope data (tangential and angular acceleration)
+  float aX_1, aY_1, aZ_1, gX_1, gY_1, gZ_1;
+  float aX_2, aY_2, aZ_2, gX_2, gY_2, gZ_2;
+
 
   // STATE variable for holding which state our system is in
   /*
   0 -> IDLE
   1 -> LIFT (foot is being lifted up, not giving support)
-  2 -> CONTACT (foot has contacted the floor)
-  3 -> SUPPORT (from some time-step/other parameter, we know to start straightening the leg)
+  2 -> PRECONTACT (foot is on downswing, used for internal tracking purposes)
+  3 -> CONTACT (foot has contacted the floor)
+  4 -> SUPPORT (from some time-step/other parameter, we know to start straightening the leg)
   */
   int state; 
   int prevState;
@@ -22,6 +28,10 @@
   #define PRECONTACT 2
   #define CONTACT 3
   #define SUPPORT 4
+
+  // Allowance for outliers when checking for trends in the state transitions
+  const int allowance = 1; // just 1 outlier for now, ensures that we don't preemptively change states
+  int allowed = 0;
 
   // Variables and data structures for running average, taken from the average of X and Z gyroscope values (same trend, allows for initial smoothing)
   const int sampleWindow = 5; // averages over previous 5 samples, introduces small delay
@@ -59,13 +69,15 @@
   */
   void setup() {
 
-    Serial.begin(9600);
-    // Serial.begin(600);
+    Serial.begin(BAUDRATE);
     Wire.begin();
 
     // Initialize MPU6050
-    mpu.initialize();
-    if (!mpu.testConnection()) {
+    mpu1.initialize();
+    mpu2.initialize();
+
+    // if (!mpu1.testConnection() || !mpu2.testConnection()) {
+      if (!mpu2.testConnection()){
         Serial.println("MPU6050 connection failed!");
         while (1);
     }
@@ -73,7 +85,7 @@
 
     // Print CSV header to the serial monitor
     // Serial.println("AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ");
-    Serial.println("GyroX,GyroZ,MovingAvg,AngleX,AngleY"); 
+    Serial.println("GyroX,GyroZ,MovingAvg,AngleX1,AngleY1,AngleX2,AngleY2,RelativeX,RelativeY"); 
 
 
     //Set default to state to idle, before walking has begun
@@ -82,6 +94,8 @@
 
   }
 
+  // For visualization purposes only
+  //////////////////////////////////////////////////////////////////////
   void printState() {
     Serial.print(100);
     Serial.print(",");
@@ -94,29 +108,49 @@
     Serial.println(100);
   }
 
+  bool TOPRINT = 0; // whether or not we send the spikes for state transitions
+
+
+  const int count = 5;
+  int counter = 0;
+  //////////////////////////////////////////////////////////////////////
+
 
   void loop() {
 
-    int16_t ax, ay, az, gx, gy, gz;
-    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    int16_t ax1, ay1, az1, gx1, gy1, gz1;
+    int16_t ax2, ay2, az2, gx2, gy2, gz2;
+
+    mpu1.getMotion6(&ax1, &ay1, &az1, &gx1, &gy1, &gz1);
+    mpu2.getMotion6(&ax2, &ay2, &az2, &gx2, &gy2, &gz2);
+
+    // Converting to physical units
 
     // // convert to +-8g's (converting to +-1g gave near-0 results) NOTE: THESE WERE KIND OF USELESS REGARDLESS SO I DIDN'T USE THEM AT ALL
-    // float accelX = ax / 4096.0;
-    // float accelY = ay / 4096.0;
-    // float accelZ = az / 4096.0;
-
+    // float accelX1 = ax1 / 4096.0; float accelY1 = ay1 / 4096.0; float accelZ1 = az1 / 4096.0;
     // converting to degrees/s
-    float gyroX = gx / 131.0;
-    float gyroY = gy / 131.0;
-    float gyroZ = gz / 131.0;
+    float gyroX1 = gx1 / 131.0; float gyroY1 = gy1 / 131.0; float gyroZ1 = gz1 / 131.0;
 
-    // Update set "current value" and update running average
-    gAvgXZ = (gyroX + gyroZ)/2;
+    // float accelX2 = ax2 / 4096.0; float accelY2 = ay2 / 4096.0; float accelZ2 = az2 / 4096.0;
+    float gyroX2 = gx2 / 131.0; float gyroY2 = gy2 / 131.0; float gyroZ2 = gz2 / 131.0;
+
+    // Update set "current value" and update running average for SHANK angular accleration
+    gAvgXZ = (gyroX1 + gyroZ1)/2;
     updateRunningAverage(gAvgXZ);
 
     // Calculates angles of MPU
-    float angX, angY;
-    calculateAngles(ax, ay, az, angX, angY);
+    float angX1, angY1;
+    float angX2, angY2;
+    calculateAngles(ax1, ay1, az1, angX1, angY1);
+    calculateAngles(ax2, ay2, az2, angX2, angY2);
+
+    /////////////// TESTING AREA FOR ANGLES ///////////////
+    float shankThighX = abs(angX1 - angX2);
+    float shankThighY = abs(angY1 - angY2);
+
+    float compX1 = 0.96*gyroX1 + 0.04*angX1;
+    float compX2 = 0.96*gyroX2 + 0.04*angX2;  
+  /////////////////////////////////////////////////////////
 
     // Identifies when to swap to next state
     if (state == IDLE) {
@@ -125,13 +159,19 @@
       Need the gyro X value to be much larger than the running average (basically taking derivative), and need make sure that the running average
        is above some threshold to ensure we don't switch states just due to noisy sensor data
       */
-      if (gyroX >= 1.2*runAvg && runAvg >= 5) {
-        state = LIFT;
-        printState();
+      if (gyroX1 >= 1.2*runAvg && runAvg >= 5) {
+        if (allowed >= allowance) {
+          state = LIFT;
+          if (TOPRINT) printState();
+          allowed = 0;
+        }
+        else {
+          allowed += 1;
+        }
       }
     }
 
-    if (state == LIFT) {
+    if (state == LIFT) { // NOTE: no outlier detection for this, we want to know about this event happening ASAP and if it happens due to outlier it's non-consequential
       /*
       Identifies that the leg is about to make contact with the ground.
       Need to know that the previous XZ value was negative, since it will only contact after that has happened. We also need to take "derivative" of the XZ average
@@ -139,9 +179,8 @@
       */
       if (runAvg < 0 && gAvgXZ > gAvgXZ_prev) {
         state = PRECONTACT;
-        printState();
+        if (TOPRINT) printState();
       }
-
     }
 
     if (state == PRECONTACT) {
@@ -151,8 +190,14 @@
       We can use either the value going above 0, or look for a peak where the previous value is higher than the current, since there's a chance of it not crossing the 0 line
       */
       if (runAvg > 0 || gAvgXZ < gAvgXZ_prev) {
-        state = CONTACT;
-        printState();
+        if (allowed >= allowance) {
+          state = CONTACT;
+          if (TOPRINT) printState();
+          allowed = 0;
+        }
+        else {
+          allowed += 1;
+        }
       }
     }
 
@@ -165,12 +210,18 @@
       to support (they have started adding force)
       */
       if (runAvg <= 0 && gAvgXZ < gAvgXZ_prev) {
-        state = SUPPORT;
-        printState();
+        if (allowed >= allowance) {
+          state = SUPPORT;
+          if (TOPRINT) printState();
+          allowed = 0;
+        }
+        else {
+          allowed += 1;
+        }
       }
     }
 
-    // this can probably be better done with using the relative angles of the legs instead
+    // this can probably be better done with using the relative angles of the legs instead (above 15 degrees is def bent, below 12 degrees is def straight) <- the small window is fine
     if (state == SUPPORT){
       /*
       Identifies that the leg no longer needs support.
@@ -179,30 +230,48 @@
       */
       //we keep supporting until we find that the value is above 10 or 15, since we will take 2 previous and divide by 2 to find an average (after the trough)
       if ((gAvgXZ + gAvgXZ_prev)/2 > 10) { // at this point we slack the wire going to the leg to allow it to bend. cycle repeats
-        state = IDLE;
-        printState();
+        if (allowed >= allowance) {
+          state = IDLE;
+          if (TOPRINT) printState();
+          allowed = 0;
+        }
+        else {
+          allowed += 1;
+        }
       }
     }
     
     // Send data to the serial monitor for logging
-    // Serial.print(accelX);
+    /*  
+    Serial.print(accelX);
+    Serial.print(",");
+    Serial.print(accelY);
+    Serial.print(",");
+    Serial.print(accelZ);
+    Serial.print(",");
+    */
+    if ((counter % count) == 0) { // prints every 10th sample only
+    // Serial.print(gyroX1);
     // Serial.print(",");
-    // Serial.print(accelY);
+    // Serial.print(gyroZ1);
     // Serial.print(",");
-    // Serial.print(accelZ);
+    // Serial.print(runAvg);
     // Serial.print(",");
+    Serial.print(angX1);
+    Serial.print(",");
+    // Serial.print(angY1);
+    // Serial.print(",");
+    Serial.print(angX2);
+    Serial.print(",");
+    // Serial.print(angY2);
+    // Serial.print(",");
+    Serial.print(shankThighX);
+    Serial.print(",");
+    // Serial.println(shankThighY);
 
-    Serial.print(gyroX);
-    Serial.print(",");
-    // Serial.print(gyroY);
-    // Serial.print(",");
-    Serial.print(gyroZ);
-    Serial.print(",");
-    Serial.print(runAvg);
-    Serial.print(",");
-    Serial.print(angX);
-    Serial.print(",");
-    Serial.println(angY);
+    Serial.println(sTX2);
+    }
+    counter += 1;
 
     delay(25);
   }
