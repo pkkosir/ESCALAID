@@ -1,18 +1,19 @@
 /****************************************************************PID_VAR*********************************************************************/
 #include "HX711.h" //This library can be obtained here http://librarymanager/All#Avia_HX711
 #include "PID_v2.h"
+#include "AS5600.h"
 
 #define PID_input A1
 #define PID_output 6
 
 double setPoint = 0;
-double input = 0;
+double tension = 0;
 double error = 0;
 int output = 0;
 int dir = 0, lastDir = 0; //0 is cw, 1 is ccw
 int braked = 0;
 double Kp = 5, Ki = 0.8, Kd = 0.15;
-PID controller(&input, &error, &setPoint, Kp, Ki, Kd, P_ON_E, DIRECT);
+PID controller(&tension, &error, &setPoint, Kp, Ki, Kd, P_ON_E, DIRECT);
 
 
 //HX711 Tension Sensor Codes
@@ -58,7 +59,7 @@ float gyroX, gyroY, gyroZ;
 2 -> CONTACT (foot has contacted the floor)
 3 -> SUPPORT (from some time-step/other parameter, we know to start straightening the leg)
 */
-int state; 
+int ustate; 
 int prevState;
 #define PRELIFT 0
 #define LIFT 1
@@ -75,6 +76,13 @@ float runAvg = 0;
 
 int bufferIndex = 0;
 
+
+/****************************************************************HALL_EFFECT_VAR*********************************************************************/
+
+AS5600 as5600;
+float temp_max = 0;
+float spoolAngle = 0;
+int spoolRev = 0;
 /****************************************************************CONTROL_VAR*********************************************************************/
 //CONTROL FLOW VARIABLES
 int Idle_button = 43;
@@ -95,35 +103,54 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
       return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-/****************************************************************SETUP_FUNC*********************************************************************/
-void setup() {
-  Serial.begin(9600);
-  HX711_setup();
-  mc_init();
-
-  //initialize PID
-  input = SPI_tension();
+/****************************************************************SETUP_FUNCS*********************************************************************/
+void PID_init(){
   setPoint = 3;
   controller.SetOutputLimits(-255, 255);
   controller.SetMode(AUTOMATIC);
   delay(1000);
-  
-  
-  digitalWrite(mc_IN1, HIGH);
-  digitalWrite(mc_IN2, LOW);
-  analogWrite(mc_PWM,100);
-  delay(50);
-  analogWrite(mc_PWM,0);
+}
 
-  //Button Setup
+void as5600_init() {
+  as5600.begin(4);  //  set direction pin.
+  as5600.setDirection(AS5600_CLOCK_WISE);  //  default, just be explicit.
+
+  Serial.println(as5600.getAddress());
+
+  int b = as5600.isConnected();
+  Serial.print("Connect: ");
+  Serial.println(b);
+}
+
+void mc_init() {
+  pinMode(mc_IN1, OUTPUT);
+  pinMode(mc_IN2, OUTPUT);
+  pinMode(mc_PWM, OUTPUT);
+}
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();
+
+  //initialize PID
+  PID_init();
+
+  //initialize Tensior Sensor
+  HX711_setup();
+
+  //initialize Hall effect Sensor
+  as5600_init();
+  
+  //initialize motor
+  mc_init();
+
+  //initialize Buttons as interrupts
   interrupts(); //enable interrupts
   pinMode(mode1_button, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(mode1_button),mode_selection,FALLING);
   pinMode(Idle_button, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(Idle_button),mode_selection,FALLING);
 
-  //IMU SETUP (assuming post calibration)
-  Wire.begin();
   //Initialize MPU6050
   mpu.initialize();
   if (!mpu.testConnection()) {
@@ -137,8 +164,8 @@ void setup() {
   Serial.println("GyroX,GyroZ,MovingAvg,AngleX,AngleY"); 
 
   //Set default to state to idle, before walking has begun
-  state = PRELIFT;
-  prevState = state;
+  ustate = PRELIFT;
+  prevState = ustate;
 
 }
 
@@ -155,13 +182,24 @@ void loop() {
 void mode_selection(){
    //IDLE MODE BUTTON PRESS
   if(digitalRead(Idle_button)==true && umode != IDLE){
-    umode = IDLE;
+    if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
+      umode = IDLE;
+    }
+    else{
+
+    }
+    
   } while(digitalRead(Idle_button) == true){
     delay(100);
   }
   //ASCEND MODE BUTTON PRESS
   if(digitalRead(mode1_button)==true && umode != ASCEND){
-    umode = ASCEND;
+    if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
+      umode = ASCEND;
+    }
+    else{
+
+    }
   } while(digitalRead(mode1_button) == true){
     delay(100);
   }
@@ -185,65 +223,68 @@ void state_detection(){
 }
 /****************************************************************IDLE_STATE_FUNC*********************************************************************/
 void idle_state(){
-
+  //known cable slack length, pretty much spool/unspool until halleffect detects that reading.
+  while(spoolAngle > 0 && spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
+    motor_control(200, 0, 0)
+  }
 }
 /****************************************************************ASCEND_STATE_FUNC*********************************************************************/
 void ascend_state(){
-  if (state == PRELIFT) {
+  if (ustate == PRELIFT) {
     /*
     Identifies that the leg is going from IDLE to beign lifted. 
     Need the gyro X value to be much larger than the running average (basically taking derivative), and need make sure that the running average
       is above some threshold to ensure we don't switch states just due to noisy sensor data
     */
     if (gyroX >= 1.2*runAvg && runAvg >= 5) {
-      state = LIFT;
+      ustate = LIFT;
       //printState();
     }
   }
 
-  if (state == LIFT) {
+  if (ustate == LIFT) {
     /*
     Identifies that the leg is about to make contact with the ground.
     Need to know that the previous XZ value was negative, since it will only contact after that has happened. We also need to take "derivative" of the XZ average
     to determine when it has started becoming positive since that change is when the foot has made contact
     */
     if (runAvg < 0 && gAvgXZ > gAvgXZ_prev) {
-      state = PRECONTACT;
+      ustate = PRECONTACT;
       //printState();
     }
 
   }
 
-  if (state == PRECONTACT) {
+  if (ustate == PRECONTACT) {
     /*
     Identifies when the leg actually makes CONTACT with the ground.
     Need to see when the moving averages goes from negative to positive when in the precontact stage, which only occurs when we have the sinusoidal looking wave in movement.
     We can use either the value going above 0, or look for a peak where the previous value is higher than the current, since there's a chance of it not crossing the 0 line
     */
     if (runAvg > 0 || gAvgXZ < gAvgXZ_prev) {
-      state = CONTACT;
+      ustate = CONTACT;
       //printState();
     }
   }
 
   // NAIVE WAY OF CHECKING FOR WEIGHT ACCEPTANCE: USE THE HUMP THAT HAPPENS AFTER WE'VE MADE CONTACT
   // BETTER WAY OF CHECKING FOR WEIGHT ACCEPTANCE: TIGHETEN UNTIL WE FEEL TENSION IN THE STRING, THEN STOP UNTIL WE SEE THAT THERE IS NO TENSION (MEANS THE PERSON HAS STARTED STRAIGHTENING THEIR LEG)
-  if (state == CONTACT) {
+  if (ustate == CONTACT) {
     /*
     Identifies when the leg needs SUPPORT from the system.
     Need to see seen, after making contact, we wait for a negative trend in data and for the value to be negative, since that will be the latest point we would want 
     to support (they have started adding force)
     */
     if (runAvg <= 0 && gAvgXZ < gAvgXZ_prev) {
-      state = SUPPORT;
+      ustate = SUPPORT;
       //printState();
     }
   }
 
   // this can probably be better done with using the relative angles of the legs instead
-  if (state == SUPPORT){
+  if (ustate == SUPPORT){
     if (!stopped){
-      PID_Update(input);
+      PID_Update();
     }
     /*
     Identifies that the leg no longer needs support.
@@ -252,7 +293,7 @@ void ascend_state(){
     */
     //we keep supporting until we find that the value is above 10 or 15, since we will take 2 previous and divide by 2 to find an average (after the trough)
     if ((gAvgXZ + gAvgXZ_prev)/2 > 10) { // at this point we slack the wire going to the leg to allow it to bend. cycle repeats
-      state = PRELIFT;
+      ustate = PRELIFT;
       //printState();
     }
   }   
@@ -261,7 +302,7 @@ void ascend_state(){
 /****************************************************************SENSOR_TOP_LEVEL*********************************************************************/
 void sensors(){
   I2C_IMU();
-  input = SPI_tension();
+  tension = SPI_tension();
 }
 /****************************************************************IMU_SENSOR_READINGS*********************************************************************/
 void  I2C_IMU(){
@@ -313,16 +354,72 @@ void HX711_setup() { // HX711 Tension Sensor Init
   long zero_factor = hx711.read_average(); //Get a baseline reading
   Serial.print("Zero factor: "); //This can be used to remove the need to tare the scale. Useful in permanent scale projects.
   Serial.println(zero_factor);
+
+  hx711.set_scale(calibration_factor); //Adjust to this calibration factor
+
   delay(100);
 }
 
 double SPI_tension() { // HX711 Tension Sensor reading
-  hx711.set_scale(calibration_factor); //Adjust to this calibration factor
   return hx711.get_units();
 }
 /****************************************************************HALL_EFFECT_SENSOR_READINGS*********************************************************************/
-/****************************************************************PID_FUNCS*********************************************************************/
-void PID_Update(double tension){
+void as5600_get_angle() {
+  static uint32_t lastTime = 0;
+
+  as5600.getCumulativePosition();
+
+  if (millis() - lastTime >= 100)
+  {
+    lastTime = millis();
+    spoolAngle = float_map(as5600.readAngle(), 0, 4096, 0, 360);
+    float max_angle = as5600.readAngle();
+    if (as5600.readAngle() > temp_max){
+      temp_max = max_angle;
+    }
+    spoolRev = (as5600.getRevolutions()*-1);
+    Serial.print("Angle: ");
+    Serial.print(spoolAngle, 2);
+    Serial.print(" | revolutions: ");
+    Serial.print(spoolRev);
+    Serial.print(" | max_analog: ");
+    Serial.println(temp_max);
+  }
+}
+
+/****************************************************************MOTOR_CONTROL_FUNCS*********************************************************************/
+void motor_control(int speed, bool direction, bool brake){ //direction = 0 means ccw rotation and direction = 1 means cw rotation, brake = 0 means no brake and brake = 1 means brake.
+  if(direction == 0 && brake = 0){
+    mc_counterclockwise(speed);
+  }
+  else if (direction == 1 && brake = 0){
+    mc_clockwise(speed);
+  }
+  else{
+    mc_brake();
+  }
+}
+
+void mc_clockwise(int mc_speed) {
+    digitalWrite(mc_IN1, HIGH);
+    digitalWrite(mc_IN2, LOW);
+    analogWrite(mc_PWM, mc_speed);
+}
+
+void mc_counterclockwise(int mc_speed) {
+    digitalWrite(mc_IN1, LOW);
+    digitalWrite(mc_IN2, HIGH);
+    analogWrite(mc_PWM, mc_speed);
+}
+
+void mc_brake() {
+    digitalWrite(mc_IN1, LOW);
+    digitalWrite(mc_IN2, LOW);
+    analogWrite(mc_PWM, 0);
+}
+
+/****************************************************************PID_FUNC*********************************************************************/
+void PID_Update(){
   controller.Compute();
 
   (error >= 0) ? dir = 0: dir = 1;
@@ -360,55 +457,7 @@ void PID_Update(double tension){
 
 
 
-/****************************************************************BASIC_MOTOR_CONTROL_FUNCS*********************************************************************/
-
-void mc_init() {
-  pinMode(mc_IN1, OUTPUT);
-  pinMode(mc_IN2, OUTPUT);
-  pinMode(mc_PWM, OUTPUT);
-}
-
-void mc_clockwise(int mc_speed) {
-  if (prev_mc_state != 1 && mc_state == 1) {
-    digitalWrite(mc_IN1, HIGH);
-    digitalWrite(mc_IN2, LOW);
-    analogWrite(mc_PWM, mc_speed);
-    prev_mc_state = 1;
-  }
-}
-
-void mc_counterclockwise(int mc_speed) {
-  if (prev_mc_state != 2 && mc_state == 2) {
-    digitalWrite(mc_IN1, LOW);
-    digitalWrite(mc_IN2, HIGH);
-    analogWrite(mc_PWM, mc_speed);
-    prev_mc_state = 2;
-  }
-}
-
-void mc_brake() {
-  if (prev_mc_state != 0 && mc_state == 0) {
-    digitalWrite(mc_IN1, LOW);
-    digitalWrite(mc_IN2, LOW);
-    analogWrite(mc_PWM, 0);
-    prev_mc_state = 0;
-  }
-}
 
 
-void schmidty(){
-  if  (SPI_tension() >= upper_sensor){
-    mc_state = 2;
-    mc_counterclockwise(255);
-    delay(10);
-  }
-  else if  (SPI_tension() <= lower_sensor){
-    mc_state = 1;
-    mc_clockwise(255);
-    delay(10);
-  }
-  else{
-    mc_state = 0;
-    mc_brake();
-  }
-}
+
+
