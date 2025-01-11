@@ -1,3 +1,12 @@
+/***TO-DO**/
+//-Add led functionality with modes [SORTA DONE]
+//-Bring in position variables of 2 IMUs to figure out straight leg position
+//-Threads for sensor readings [DID SOME RESEARCH BUT NO PROPER WAY TO DO SO]
+//-Estop implmentation [STARTED WORKING]
+//-Device active and calibration [SORTA DONE]
+//-Motor control during different states of ascend
+
+
 /****************************************************************PID_VAR*********************************************************************/
 #include "HX711.h" //This library can be obtained here http://librarymanager/All#Avia_HX711
 #include "PID_v2.h"
@@ -10,7 +19,7 @@ double setPoint = 0;
 double tension = 0;
 double error = 0;
 int output = 0;
-int dir = 0, lastDir = 0; //0 is cw, 1 is ccw
+int dir = 0, lastDir = 0; //1 is cw, 0 is ccw
 int braked = 0;
 double Kp = 5, Ki = 0.8, Kd = 0.15;
 PID controller(&tension, &error, &setPoint, Kp, Ki, Kd, P_ON_E, DIRECT);
@@ -54,7 +63,7 @@ float gyroX, gyroY, gyroZ;
 
 // STATE variable for holding which state our system is in
 /*
-0 -> IDLE
+0 -> PRELIFT
 1 -> LIFT (foot is being lifted up, not giving support)
 2 -> CONTACT (foot has contacted the floor)
 3 -> SUPPORT (from some time-step/other parameter, we know to start straightening the leg)
@@ -84,9 +93,21 @@ float temp_max = 0;
 float spoolAngle = 0;
 int spoolRev = 0;
 /****************************************************************CONTROL_VAR*********************************************************************/
+int active = 0;
 //CONTROL FLOW VARIABLES
-int Idle_button = 43;
-int mode1_button = 44; //ASCEND MODE
+int active_button = 43; //device init MODE
+int Idle_button = 44; //44 //IDLE MODE
+int Ascend_button = 45; //ASCEND MODE
+int Descend_button = 46; //DESCEND MODE
+int estop_button = 47; //emergency stop MODE
+
+//MODE_LED
+int Active_LED = 39;
+int Idle_LED = 40;//40
+int Ascend_LED = 41;
+int Descend_LED = 42;
+
+
 
 //TYPEDEF FOR MODE
 typedef enum {
@@ -111,6 +132,19 @@ void PID_init(){
   delay(1000);
 }
 
+void HX711_setup() { // HX711 Tension Sensor Init
+  hx711.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  hx711.set_scale();
+  hx711.tare();  //Reset the scale to 0
+  long zero_factor = hx711.read_average(); //Get a baseline reading
+  Serial.print("Zero factor: "); //This can be used to remove the need to tare the scale. Useful in permanent scale projects.
+  Serial.println(zero_factor);
+
+  hx711.set_scale(calibration_factor); //Adjust to this calibration factor
+
+  delay(100);
+}
+
 void as5600_init() {
   as5600.begin(4);  //  set direction pin.
   as5600.setDirection(AS5600_CLOCK_WISE);  //  default, just be explicit.
@@ -128,9 +162,7 @@ void mc_init() {
   pinMode(mc_PWM, OUTPUT);
 }
 
-void setup() {
-  Serial.begin(9600);
-  Wire.begin();
+void calibrate(){
 
   //initialize PID
   PID_init();
@@ -140,16 +172,6 @@ void setup() {
 
   //initialize Hall effect Sensor
   as5600_init();
-  
-  //initialize motor
-  mc_init();
-
-  //initialize Buttons as interrupts
-  interrupts(); //enable interrupts
-  pinMode(mode1_button, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(mode1_button),mode_selection,FALLING);
-  pinMode(Idle_button, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(Idle_button),mode_selection,FALLING);
 
   //Initialize MPU6050
   mpu.initialize();
@@ -158,23 +180,53 @@ void setup() {
       while (1);
   }
   Serial.println("MPU6050 initialized.");
-
   // Print CSV header to the serial monitor
   // Serial.println("AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ");
   Serial.println("GyroX,GyroZ,MovingAvg,AngleX,AngleY"); 
 
-  //Set default to state to idle, before walking has begun
-  ustate = PRELIFT;
-  prevState = ustate;
 
+}
+
+void setup() {
+  //setup deviceactive button and wait for active = 1 after button press
+  interrupts(); //enable interrupts
+  pinMode(active_button, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(active_button),activate,FALLING);
+
+  while(active = 0){
+
+  }
+
+  Serial.begin(9600);
+  Wire.begin();
+
+ 
+  //initialize motor
+  mc_init();
+
+  //initialize Buttons as interrupts
+  pinMode(Ascend_button, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(Ascend_button),mode_selection,FALLING);
+  pinMode(Idle_button, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(Idle_button),mode_selection,FALLING);
+  pinMode(estop_button, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(estop_button),estop,FALLING);
+
+  //initialize LEDs
+  pinMode(Active_LED, OUTPUT);
+  pinMode(Idle_LED, OUTPUT );
+  pinMode(Ascend_LED, OUTPUT);
 }
 
 /****************************************************************LOOP_FUNC*********************************************************************/
 void loop() {
-  delay(10);
   
-  sensors();
-  state_detection();
+  if(active == 1){
+    delay(10);
+    sensors();
+    state_detection();
+  }
+  
 
 }
 
@@ -184,27 +236,44 @@ void mode_selection(){
   if(digitalRead(Idle_button)==true && umode != IDLE){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
       umode = IDLE;
-    }
-    else{
-
-    }
-    
+      digitalWrite(Idle_LED,HIGH);
+    }   
   } while(digitalRead(Idle_button) == true){
     delay(100);
   }
   //ASCEND MODE BUTTON PRESS
-  if(digitalRead(mode1_button)==true && umode != ASCEND){
+  if(digitalRead(Ascend_button)==true && umode != ASCEND){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
       umode = ASCEND;
+      //Set default to state to idle, before walking has begun
+      ustate = PRELIFT;
+      prevState = ustate;
+      digitalWrite(Ascend_LED,HIGH);
     }
-    else{
-
-    }
-  } while(digitalRead(mode1_button) == true){
+  } while(digitalRead(Ascend_button) == true){
     delay(100);
   }
 
+}
 
+void estop(){ //User manual that says after estop device must be restarted??
+  while(spoolAngle > 0 && spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
+    motor_control(255, 0);
+  }
+  active = 0;
+}
+
+void activate(){
+    if (active == 0){//User turns on device
+      active = 1;
+      calibrate();//calibrate sensors and PID everytime deviceactivates
+      delay(200);
+    }
+    else if(active == 1 ){//User tries to turn off device
+      if(umode == IDLE){//ensuring we are in IDLE mode to turn off device
+        active = 0;
+      }
+    } 
 }
 
 /****************************************************************TOP_STATE_FUNC*********************************************************************/
@@ -225,7 +294,7 @@ void state_detection(){
 void idle_state(){
   //known cable slack length, pretty much spool/unspool until halleffect detects that reading.
   while(spoolAngle > 0 && spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
-    motor_control(200, 0, 0)
+    motor_control(200, 0);
   }
 }
 /****************************************************************ASCEND_STATE_FUNC*********************************************************************/
@@ -347,19 +416,6 @@ void calculateAngles(float ax, float ay, float az, float& angX, float& angY) {//
 }
 
 /****************************************************************TENSION_SENSOR_READINGS*********************************************************************/
-void HX711_setup() { // HX711 Tension Sensor Init
-  hx711.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-  hx711.set_scale();
-  hx711.tare();  //Reset the scale to 0
-  long zero_factor = hx711.read_average(); //Get a baseline reading
-  Serial.print("Zero factor: "); //This can be used to remove the need to tare the scale. Useful in permanent scale projects.
-  Serial.println(zero_factor);
-
-  hx711.set_scale(calibration_factor); //Adjust to this calibration factor
-
-  delay(100);
-}
-
 double SPI_tension() { // HX711 Tension Sensor reading
   return hx711.get_units();
 }
@@ -372,59 +428,53 @@ void as5600_get_angle() {
   if (millis() - lastTime >= 100)
   {
     lastTime = millis();
-    spoolAngle = float_map(as5600.readAngle(), 0, 4096, 0, 360);
-    float max_angle = as5600.readAngle();
-    if (as5600.readAngle() > temp_max){
-      temp_max = max_angle;
-    }
+    spoolAngle = fmap(as5600.readAngle(), 0, 4096, 0, 360);
     spoolRev = (as5600.getRevolutions()*-1);
     Serial.print("Angle: ");
     Serial.print(spoolAngle, 2);
     Serial.print(" | revolutions: ");
     Serial.print(spoolRev);
-    Serial.print(" | max_analog: ");
-    Serial.println(temp_max);
   }
 }
 
 /****************************************************************MOTOR_CONTROL_FUNCS*********************************************************************/
-void motor_control(int speed, bool direction, bool brake){ //direction = 0 means ccw rotation and direction = 1 means cw rotation, brake = 0 means no brake and brake = 1 means brake.
-  if(direction == 0 && brake = 0){
-    mc_counterclockwise(speed);
+void motor_control(int speed, bool direction){ //direction = 0 means ccw rotation and direction = 1 means cw rotation, speed = 0 means brake
+  if(direction == 0 && lastDir != 0){
+    mc_counterclockwise();
+    lastDir = direction;
   }
-  else if (direction == 1 && brake = 0){
-    mc_clockwise(speed);
+  else if (direction == 1 && lastDir != 1){
+    mc_clockwise();
+    lastDir = direction;
   }
-  else{
-    mc_brake();
-  }
+  mc_speed(speed);
+
 }
 
-void mc_clockwise(int mc_speed) {
+void mc_clockwise() {
     digitalWrite(mc_IN1, HIGH);
     digitalWrite(mc_IN2, LOW);
-    analogWrite(mc_PWM, mc_speed);
+    
 }
 
-void mc_counterclockwise(int mc_speed) {
+void mc_counterclockwise() {
     digitalWrite(mc_IN1, LOW);
     digitalWrite(mc_IN2, HIGH);
+}
+
+void mc_speed(int mc_speed){ //Set speed=0 to brake
     analogWrite(mc_PWM, mc_speed);
 }
 
-void mc_brake() {
-    digitalWrite(mc_IN1, LOW);
-    digitalWrite(mc_IN2, LOW);
-    analogWrite(mc_PWM, 0);
-}
+
 
 /****************************************************************PID_FUNC*********************************************************************/
 void PID_Update(){
   controller.Compute();
 
-  (error >= 0) ? dir = 0: dir = 1;
+  (error >= 0) ? dir = 1: dir = 0;
   float errC = constrain(error, -20, 20);
-  (dir == 0) ? output = fmap(abs(errC), 0, 20, 150, 180): output = fmap(abs(errC), 0, 20, 50, 100);
+  (dir == 1) ? output = fmap(abs(errC), 0, 20, 150, 180): output = fmap(abs(errC), 0, 20, 50, 100);
 
   Serial.print("TENSION ---- ");
   Serial.print(tension);
@@ -435,24 +485,13 @@ void PID_Update(){
   Serial.print(" ---- OUTPUT ---- ");
   Serial.println(output);
 
-   if (dir == 0 && lastDir != 0){
-     digitalWrite(mc_IN1, HIGH);
-     digitalWrite(mc_IN2, LOW);
-     lastDir = dir;
-   }
-   else if (dir == 1 && lastDir != 1){
-     digitalWrite(mc_IN1, LOW);
-     digitalWrite(mc_IN2, HIGH);
-     lastDir = dir;
-   }
    if (abs(errC) < 1.5){
-     analogWrite(mc_PWM, 0);
-     braked = 1;
+    motor_control(0,dir);
    }
    else{
-     analogWrite(mc_PWM, output);
-     braked = 0;
+    motor_control(output,dir);
    }
+
 }
 
 
