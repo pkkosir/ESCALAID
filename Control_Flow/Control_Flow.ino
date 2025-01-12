@@ -1,23 +1,25 @@
 /***TO-DO**/
-//-Add led functionality with modes [SORTA DONE]
 //-Bring in position variables of 2 IMUs to figure out straight leg position
-//-Threads for sensor readings [DID SOME RESEARCH BUT NO PROPER WAY TO DO SO]
-//-Estop implmentation [STARTED WORKING]
-//-Device active and calibration [SORTA DONE]
 //-Motor control during different states of ascend
+//-Threads for sensor readings [CANT DO THREADS, IMPLEMENTED MICROSECOND INTERUPPTS FOR SENSOR READING INSTEAD]
+//-Device active and calibration [SORTA DONE]
+//-Add led functionality with modes [SORTA DONE]
+//-Estop implmentation [DONE?]
+
 
 
 /****************************************************************PID_VAR*********************************************************************/
 #include "HX711.h" //This library can be obtained here http://librarymanager/All#Avia_HX711
 #include "PID_v2.h"
 #include "AS5600.h"
+#include "TimerOne.h"
 
 #define PID_input A1
 #define PID_output 6
 
 double setPoint = 0;
-double tension = 0;
-double error = 0;
+volatile double tension = 0;
+volatile double error = 0;
 int output = 0;
 int dir = 0, lastDir = 0; //1 is cw, 0 is ccw
 int braked = 0;
@@ -56,10 +58,15 @@ char input_mode = 'b';
 #include <MPU6050.h>
 #include <math.h>
 MPU6050 mpu;
+MPU6050_Base mpu2(0x69);
+
 
 // Variables to hold accelerometer and gyroscope data
 float accelX, accelY, accelZ;
 float gyroX, gyroY, gyroZ;
+
+float accelX2, accelY2, accelZ2;
+float gyroX2, gyroY2, gyroZ2;
 
 // STATE variable for holding which state our system is in
 /*
@@ -93,7 +100,7 @@ float temp_max = 0;
 float spoolAngle = 0;
 int spoolRev = 0;
 /****************************************************************CONTROL_VAR*********************************************************************/
-int active = 0;
+volatile int active = 0;
 //CONTROL FLOW VARIABLES
 int active_button = 43; //device init MODE
 int Idle_button = 44; //44 //IDLE MODE
@@ -176,14 +183,25 @@ void calibrate(){
   //Initialize MPU6050
   mpu.initialize();
   if (!mpu.testConnection()) {
-      Serial.println("MPU6050 connection failed!");
+      Serial.println("1st MPU6050 connection failed!");
       while (1);
   }
+
+  //mpu2.MPU6050_Base(MPU6050_ADDRESS_AD0_HIGH,Wire);
+  mpu2.initialize();
+  if (!mpu2.testConnection()) {
+      Serial.println("2nd MPU6050 connection failed!");
+      while (1);
+  }
+
   Serial.println("MPU6050 initialized.");
   // Print CSV header to the serial monitor
   // Serial.println("AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ");
   Serial.println("GyroX,GyroZ,MovingAvg,AngleX,AngleY"); 
 
+  //calls sensors func every millisecond
+  Timer1.initialize(1000); //default units of microseconds
+  Timer1.attachInterrupt(sensors);
 
 }
 
@@ -216,6 +234,8 @@ void setup() {
   pinMode(Active_LED, OUTPUT);
   pinMode(Idle_LED, OUTPUT );
   pinMode(Ascend_LED, OUTPUT);
+
+
 }
 
 /****************************************************************LOOP_FUNC*********************************************************************/
@@ -233,22 +253,26 @@ void loop() {
 /****************************************************************BUTTON_MODE_FUNC*********************************************************************/
 void mode_selection(){
    //IDLE MODE BUTTON PRESS
-  if(digitalRead(Idle_button)==true && umode != IDLE){
+  if(digitalRead(Idle_button) == LOW && umode != IDLE){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
       umode = IDLE;
       digitalWrite(Idle_LED,HIGH);
+      digitalWrite(Active_LED,LOW);
+      digitalWrite(Ascend_LED,LOW);
     }   
   } while(digitalRead(Idle_button) == true){
     delay(100);
   }
   //ASCEND MODE BUTTON PRESS
-  if(digitalRead(Ascend_button)==true && umode != ASCEND){
+  if(digitalRead(Ascend_button) == LOW && umode != ASCEND){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
       umode = ASCEND;
       //Set default to state to idle, before walking has begun
       ustate = PRELIFT;
       prevState = ustate;
       digitalWrite(Ascend_LED,HIGH);
+      digitalWrite(Idle_LED,LOW);
+      digitalWrite(Active_LED,LOW);
     }
   } while(digitalRead(Ascend_button) == true){
     delay(100);
@@ -260,13 +284,23 @@ void estop(){ //User manual that says after estop device must be restarted??
   while(spoolAngle > 0 && spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
     motor_control(255, 0);
   }
-  active = 0;
+  motor_control(0,0);
+  noInterrupts(); //disable interuppt
+  while(1){ //stuck in flashing lights indicating user to restart device.
+      digitalWrite(Ascend_LED,HIGH);
+      digitalWrite(Idle_LED,HIGH);
+      digitalWrite(Active_LED,HIGH);
+      active = 0;
+  }
 }
 
 void activate(){
     if (active == 0){//User turns on device
       active = 1;
       calibrate();//calibrate sensors and PID everytime deviceactivates
+      digitalWrite(Ascend_LED,LOW);
+      digitalWrite(Idle_LED,LOW);
+      digitalWrite(Active_LED,HIGH);
       delay(200);
     }
     else if(active == 1 ){//User tries to turn off device
@@ -296,6 +330,7 @@ void idle_state(){
   while(spoolAngle > 0 && spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
     motor_control(200, 0);
   }
+  motor_control(0,0);
 }
 /****************************************************************ASCEND_STATE_FUNC*********************************************************************/
 void ascend_state(){
