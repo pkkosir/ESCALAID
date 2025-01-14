@@ -211,13 +211,8 @@ void setup() {
   pinMode(active_button, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(active_button),activate,FALLING);
 
-  while(active = 0){
-
-  }
-
   Serial.begin(9600);
   Wire.begin();
-
  
   //initialize motor
   mc_init();
@@ -253,18 +248,16 @@ void loop() {
 /****************************************************************BUTTON_MODE_FUNC*********************************************************************/
 void mode_selection(){
    //IDLE MODE BUTTON PRESS
-  if(digitalRead(Idle_button) == LOW && umode != IDLE){
+  if(digitalRead(Idle_button) == LOW && umode != IDLE && active == 1){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
       umode = IDLE;
       digitalWrite(Idle_LED,HIGH);
-      digitalWrite(Active_LED,LOW);
+      //digitalWrite(Active_LED,LOW);
       digitalWrite(Ascend_LED,LOW);
     }   
-  } while(digitalRead(Idle_button) == true){
-    delay(100);
-  }
+  } 
   //ASCEND MODE BUTTON PRESS
-  if(digitalRead(Ascend_button) == LOW && umode != ASCEND){
+  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
       umode = ASCEND;
       //Set default to state to idle, before walking has begun
@@ -272,12 +265,9 @@ void mode_selection(){
       prevState = ustate;
       digitalWrite(Ascend_LED,HIGH);
       digitalWrite(Idle_LED,LOW);
-      digitalWrite(Active_LED,LOW);
+      //digitalWrite(Active_LED,LOW);
     }
-  } while(digitalRead(Ascend_button) == true){
-    delay(100);
-  }
-
+  } 
 }
 
 void estop(){ //User manual that says after estop device must be restarted??
@@ -286,7 +276,7 @@ void estop(){ //User manual that says after estop device must be restarted??
   }
   motor_control(0,0);
   noInterrupts(); //disable interuppt
-  while(1){ //stuck in flashing lights indicating user to restart device.
+  while(1){ //stuck in all lights ON indicating user to restart device.
       digitalWrite(Ascend_LED,HIGH);
       digitalWrite(Idle_LED,HIGH);
       digitalWrite(Active_LED,HIGH);
@@ -301,7 +291,7 @@ void activate(){
       digitalWrite(Ascend_LED,LOW);
       digitalWrite(Idle_LED,LOW);
       digitalWrite(Active_LED,HIGH);
-      delay(200);
+      //delay(200);
     }
     else if(active == 1 ){//User tries to turn off device
       if(umode == IDLE){//ensuring we are in IDLE mode to turn off device
