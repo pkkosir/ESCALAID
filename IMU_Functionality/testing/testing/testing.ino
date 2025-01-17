@@ -54,12 +54,12 @@
   }
 
   // Calculation for angles of the MPUs, to use absolute/relative angles to help determine state
-  void calculateAngles(float ax, float ay, float az, float& angX, float& angY) {//float& roll, float& pitch) {
+  void accelAngles(float ax, float ay, float az, float& accAngX, float& accAngY) {//float& roll, float& pitch) {
   
     // roll = atan2(ay, az) * 180 / PI;
     // pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / PI;
-    angX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
-    angY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
+    accAngX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
+    accAngY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
 
 }
 
@@ -76,8 +76,7 @@
     mpu1.initialize();
     mpu2.initialize();
 
-    // if (!mpu1.testConnection() || !mpu2.testConnection()) {
-      if (!mpu2.testConnection()){
+    if (!mpu1.testConnection() || !mpu2.testConnection()) {
         Serial.println("MPU6050 connection failed!");
         while (1);
     }
@@ -139,18 +138,22 @@
     updateRunningAverage(gAvgXZ);
 
     // Calculates angles of MPU
-    float angX1, angY1;
-    float angX2, angY2;
-    calculateAngles(ax1, ay1, az1, angX1, angY1);
-    calculateAngles(ax2, ay2, az2, angX2, angY2);
+    float accAngX1, accAngY1;
+    float accAngX2, accAngY2;
+    accelAngles(ax1, ay1, az1, accAngX1, accAngY1);
+    accelAngles(ax2, ay2, az2, accAngX2, accAngY2);
+
+
+    float angX1 = 0.96*gyroX1 + 0.04*angX1; // angles w/ complementary filter
+    float angX2 = 0.96*gyroX2 + 0.04*angX2;
+
+    float angY1 = 0.96*gyroY1 + 0.04*angY1;
+    float angY2 = 0.96*gyroY2 + 0.04*angY2;  
 
     /////////////// TESTING AREA FOR ANGLES ///////////////
     float shankThighX = abs(angX1 - angX2);
     float shankThighY = abs(angY1 - angY2);
-
-    float compX1 = 0.96*gyroX1 + 0.04*angX1;
-    float compX2 = 0.96*gyroX2 + 0.04*angX2;  
-  /////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////
 
     // Identifies when to swap to next state
     if (state == IDLE) {
@@ -229,8 +232,15 @@
       they move their leg/are moving their leg it will trigger state to move into lift
       */
       //we keep supporting until we find that the value is above 10 or 15, since we will take 2 previous and divide by 2 to find an average (after the trough)
+
+      /*
+      this will look something like this:
+
+      if (shankThighX > 160 and DELAY OF 100ms) {
+
+      */
       if ((gAvgXZ + gAvgXZ_prev)/2 > 10) { // at this point we slack the wire going to the leg to allow it to bend. cycle repeats
-        if (allowed >= allowance) {
+        if (allowed >= allowance) { 
           state = IDLE;
           if (TOPRINT) printState();
           allowed = 0;
