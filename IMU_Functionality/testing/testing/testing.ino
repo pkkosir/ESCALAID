@@ -7,7 +7,6 @@
 
   #define BAUDRATE 9600 // Defines baudrate for quick changes
 
-
   // // Variables to hold accelerometer and gyroscope data (tangential and angular acceleration)
   // float aX_1, aY_1, aZ_1, gX_1, gY_1, gZ_1;
   // float aX_2, aY_2, aZ_2, gX_2, gY_2, gZ_2;
@@ -19,7 +18,31 @@
   unsigned long prevTime = 0;
   unsigned long currTime = 0;
   float dt; 
-  float alpha = 0.9;
+  float alpha = 0.96;
+
+  // For visualization purposes only
+  //////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////
+  void printState() {
+    Serial.print(100);
+    Serial.print(",");
+    Serial.print(100);
+    Serial.print(",");
+    Serial.print(100);
+    Serial.print(",");
+    Serial.print(100);
+    Serial.print(",");
+    Serial.println(100);
+  }
+
+  bool TOPRINT = 0; // whether or not we send the spikes for state transitions
+
+  const int count = 1;
+  int counter = 0;
+  //////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////
 
   // STATE variable for holding which state our system is in
   /*
@@ -50,6 +73,9 @@
 
   int bufferIndex = 0;
 
+  /*
+  Helper methods
+  */
   void updateRunningAverage(float sample){
     
     runAvg -= buffer[bufferIndex] / sampleWindow; // Remove oldest sample
@@ -70,8 +96,8 @@
     // Gyro angles, integrated
     angX = alpha*(angX + gx*dt) + (1 - alpha)*accelAngX; //dt is global, implicit replacement of angX w/ current angX with integrated gx
     angY = alpha*(angY + gy*dt) + (1 - alpha)*accelAngY;
-}
 
+  }
 
   /*
   Initial set up of system
@@ -86,13 +112,16 @@
     mpu2.initialize();
 
     if (!mpu1.testConnection() || !mpu2.testConnection()) {
-        Serial.println("MPU6050 connection failed!");
-        while (1);
+      if (!mpu1.testConnection()) Serial.println("MPU1 failed");
+      if (!mpu1.testConnection()) Serial.println("MPU2 failed");
+      Serial.println("MPU6050 connection failed!");
+      while (1);
     }
     Serial.println("MPU6050 initialized.");
 
     // Print CSV header to the serial monitor
-    Serial.println("GyroX,GyroZ,MovingAvg,AngleX1,AngleY1,AngleX2,AngleY2,RelativeX,RelativeY"); 
+    // Serial.println("GyroX,GyroZ,MovingAvg,AngleX1,AngleY1,AngleX2,AngleY2,RelativeX,RelativeY"); 
+    Serial.println("angX1,angY1,angX2,angY2,shankThighX,shankThighY");
 
 
     //Set default to state to idle, before walking has begun
@@ -103,27 +132,6 @@
     prevTime = millis();
 
   }
-
-  // For visualization purposes only
-  //////////////////////////////////////////////////////////////////////
-  void printState() {
-    Serial.print(100);
-    Serial.print(",");
-    Serial.print(100);
-    Serial.print(",");
-    Serial.print(100);
-    Serial.print(",");
-    Serial.print(100);
-    Serial.print(",");
-    Serial.println(100);
-  }
-
-  bool TOPRINT = 0; // whether or not we send the spikes for state transitions
-
-  const int count = 5;
-  int counter = 0;
-  //////////////////////////////////////////////////////////////////////
-
 
   void loop() {
 
@@ -244,14 +252,8 @@
       they move their leg/are moving their leg it will trigger state to move into lift
       */
       //we keep supporting until we find that the value is above 10 or 15, since we will take 2 previous and divide by 2 to find an average (after the trough)
-
-      /*
-      this will look something like this:
-
-      if (shankThighX > 160 and DELAY OF 100ms) {
-
-      */
-      if ((gAvgXZ + gAvgXZ_prev)/2 > 10) { // at this point we slack the wire going to the leg to allow it to bend. cycle repeats
+      // if ((gAvgXZ + gAvgXZ_prev)/2 > 10) { 
+      if (shankThighX <= 15) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
         if (allowed >= allowance) { 
           state = IDLE;
           if (TOPRINT) printState();
@@ -264,32 +266,14 @@
     }
     
     // Send data to the serial monitor for logging
-    /*  
-    Serial.print(accelX);
-    Serial.print(",");
-    Serial.print(accelY);
-    Serial.print(",");
-    Serial.print(accelZ);
-    Serial.print(",");
-    */
-    if ((counter % count) == 0) { // prints every 10th sample only
+    if ((counter % count) == 0) { // prints every count-th sample only
     // Serial.print(gyroX1);
     // Serial.print(",");
     // Serial.print(gyroZ1);
     // Serial.print(",");
-    // Serial.print(runAvg);
-    // Serial.print(",");
-    Serial.print(angX1);
+    Serial.print(runAvg);
     Serial.print(",");
-    // Serial.print(angY1);
-    // Serial.print(",");
-    Serial.print(angX2);
-    Serial.print(",");
-    // Serial.print(angY2);
-    // Serial.print(",");
-    Serial.print(shankThighX);
-    Serial.print(",");
-    Serial.println(shankThighY);
+    Serial.println(shankThighX);
 
     }
     counter += 1;
