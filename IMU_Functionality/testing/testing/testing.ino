@@ -8,10 +8,18 @@
   #define BAUDRATE 9600 // Defines baudrate for quick changes
 
 
-  // Variables to hold accelerometer and gyroscope data (tangential and angular acceleration)
-  float aX_1, aY_1, aZ_1, gX_1, gY_1, gZ_1;
-  float aX_2, aY_2, aZ_2, gX_2, gY_2, gZ_2;
+  // // Variables to hold accelerometer and gyroscope data (tangential and angular acceleration)
+  // float aX_1, aY_1, aZ_1, gX_1, gY_1, gZ_1;
+  // float aX_2, aY_2, aZ_2, gX_2, gY_2, gZ_2;
+  // Variables to hold the global angle data
+  float glob_angX1 = 0, glob_angY1 = 0;
+  float glob_angX2 = 0, glob_angY2 = 0;
 
+  // Variables for the complementary filter for more accurate angle measurements
+  unsigned long prevTime = 0;
+  unsigned long currTime = 0;
+  float dt; 
+  float alpha = 0.9;
 
   // STATE variable for holding which state our system is in
   /*
@@ -54,13 +62,14 @@
   }
 
   // Calculation for angles of the MPUs, to use absolute/relative angles to help determine state
-  void accelAngles(float ax, float ay, float az, float& accAngX, float& accAngY) {//float& roll, float& pitch) {
-  
-    // roll = atan2(ay, az) * 180 / PI;
-    // pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / PI;
-    accAngX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
-    accAngY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
+  void calcAngles(float ax, float ay, float az, float gx, float gy, float& angX, float& angY) {
 
+    float accelAngX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
+    float accelAngY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
+
+    // Gyro angles, integrated
+    angX = alpha*(angX + gx*dt) + (1 - alpha)*accelAngX; //dt is global, implicit replacement of angX w/ current angX with integrated gx
+    angY = alpha*(angY + gy*dt) + (1 - alpha)*accelAngY;
 }
 
 
@@ -83,13 +92,15 @@
     Serial.println("MPU6050 initialized.");
 
     // Print CSV header to the serial monitor
-    // Serial.println("AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ");
     Serial.println("GyroX,GyroZ,MovingAvg,AngleX1,AngleY1,AngleX2,AngleY2,RelativeX,RelativeY"); 
 
 
     //Set default to state to idle, before walking has begun
     state = IDLE;
     prevState = state;
+
+    // Identifies previous time for use in complementary filter
+    prevTime = millis();
 
   }
 
@@ -109,13 +120,16 @@
 
   bool TOPRINT = 0; // whether or not we send the spikes for state transitions
 
-
   const int count = 5;
   int counter = 0;
   //////////////////////////////////////////////////////////////////////
 
 
   void loop() {
+
+    currTime = millis(); // Current time for comp filter
+    dt = (currTime - prevTime) / 1000.0; // Time difference for integration
+    prevTime = currTime;
 
     int16_t ax1, ay1, az1, gx1, gy1, gz1;
     int16_t ax2, ay2, az2, gx2, gy2, gz2;
@@ -137,18 +151,16 @@
     gAvgXZ = (gyroX1 + gyroZ1)/2;
     updateRunningAverage(gAvgXZ);
 
-    // Calculates angles of MPU
-    float accAngX1, accAngY1;
-    float accAngX2, accAngY2;
-    accelAngles(ax1, ay1, az1, accAngX1, accAngY1);
-    accelAngles(ax2, ay2, az2, accAngX2, accAngY2);
+    // Calculates angles of MPU w/ complementary filter
+    float angX1 = glob_angX1, angY1 = glob_angY1; // Localizing globals to be able to pass into function
+    float angX2 = glob_angX2, angY2 = glob_angY2;
+    calcAngles(ax1, ay1, az1, gyroX1, gyroY1, angX1, angY1);
+    calcAngles(ax2, ay2, az2, gyroX2, gyroY2, angX2, angY2); 
 
-
-    float angX1 = 0.96*gyroX1 + 0.04*angX1; // angles w/ complementary filter
-    float angX2 = 0.96*gyroX2 + 0.04*angX2;
-
-    float angY1 = 0.96*gyroY1 + 0.04*angY1;
-    float angY2 = 0.96*gyroY2 + 0.04*angY2;  
+    glob_angX1 = angX1; // Sending newly calculated variables back to global
+    glob_angY1 = angY1;
+    glob_angX2 = angX2;
+    glob_angY2 = angY2; 
 
     /////////////// TESTING AREA FOR ANGLES ///////////////
     float shankThighX = abs(angX1 - angX2);
@@ -277,9 +289,8 @@
     // Serial.print(",");
     Serial.print(shankThighX);
     Serial.print(",");
-    // Serial.println(shankThighY);
+    Serial.println(shankThighY);
 
-    Serial.println(sTX2);
     }
     counter += 1;
 
