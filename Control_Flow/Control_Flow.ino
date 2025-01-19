@@ -21,13 +21,7 @@
 #define PID_output 6
 #define LOADCELL_DOUT_PIN  A4
 #define LOADCELL_SCK_PIN  A3
-#define PRELIFT 0
-#define LIFT 1
-#define PRECONTACT 2
-#define CONTACT 3
-#define SUPPORT 4
-#define INVALID 5
-
+#define BAUDRATE 9600
 
 /****************************************************************PID_VAR********************************************************************/
 double setPoint = 0;
@@ -57,12 +51,15 @@ MPU6050 mpu1;
 MPU6050 mpu2(0x69); // Second MPU6050 with address 0x69
 
 
+
+
 // Variables to hold accelerometer and gyroscope data
 float Acceleration1_X, Acceleration1_Y, Accerleration1_Z;
 float Acceleration2_X, Acceleration2_Y, Accerleration2_Z;
 float ang1_X, ang1_Y;
 float ang2_X, ang2_Y;
 
+// Variables for global angle data
 float glob_angX1 = 0, glob_angY1 = 0;
 float glob_angX2 = 0, glob_angY2 = 0;
 
@@ -73,7 +70,6 @@ float dt;
 float alpha = 0.96;
 
 
-
 int imu1_time1;
 int init_time1;
 int imu2_time1;
@@ -82,12 +78,20 @@ int imu2_time1;
 /*
 0 -> PRELIFT
 1 -> LIFT (foot is being lifted up, not giving support)
-2 -> CONTACT (foot has contacted the floor)
-3 -> SUPPORT (from some time-step/other parameter, we know to start straightening the leg)
+2 -> PRECONTACT (foot is on downswing, used for internal tracking purposes)
+3 -> CONTACT (foot has contacted the floor)
+4 -> SUPPORT (from tension difference, we know to start straightening the leg)
 */
 int ustate;
 int pstate; 
 int prevState;
+
+#define PRELIFT 0
+#define LIFT 1
+#define PRECONTACT 2
+#define CONTACT 3
+#define SUPPORT 4
+#define INVALID 5
 
 // Allowance for outliers when checking for trends in the state transitions
 const int allowance = 1; // just 1 outlier for now, ensures that we don't preemptively change states
@@ -99,14 +103,9 @@ float buffer[sampleWindow] = {0};
 float gAvgXZ = 0; // Calculated average of the X and Z gyroscope values
 float gAvgXZ_prev = 0; // Buffer to store the previous average gXZ value
 float runAvg = 0;
+float shankThighX = 0;
 
 int bufferIndex = 0;
-
-
-
-
-
-
 
 /****************************************************************HALL_EFFECT_VAR*********************************************************************/
 AS5600 as5600;
@@ -237,7 +236,7 @@ void calibrate(){
 }
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(BAUDRATE);
   Wire.begin();
   //setup deviceactive button and wait for active = 1 after button press
   interrupts(); //enable interrupts
@@ -263,6 +262,7 @@ void loop() {
 
 /****************************************************************BUTTON_MODE_FUNC*********************************************************************/
 void mode_selection(){
+
    //IDLE MODE BUTTON PRESS
   if(digitalRead(Idle_button) == LOW && umode != IDLE && active == 1){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
@@ -371,13 +371,18 @@ void ascend_state(){
       pstate = ustate;
     }
     else if (Acceleration1_X >= 1.2*runAvg && runAvg >= 5) {
-      ustate = LIFT;
-      //printState();
+      if (allowed >= allowance) { // outlier allowance
+          ustate = LIFT;
+          allowed = 0;
+        }
+        else {
+          allowed += 1;
+        };
     }
 
   }
 
-  if (ustate == LIFT ) {
+  if (ustate == LIFT ) { // NOTE: no outlier detection for this, we want to know about this event happening ASAP and if it happens due to outlier it's non-consequential
     /*
     Identifies that the leg is about to make contact with the ground.
     Need to know that the previous XZ value was negative, since it will only contact after that has happened. We also need to take "derivative" of the XZ average
@@ -388,10 +393,7 @@ void ascend_state(){
     }
     else if (runAvg < 0 && gAvgXZ > gAvgXZ_prev) {
       ustate = PRECONTACT;
-      //printState();
     }
- 
-
   }
 
   if (ustate == PRECONTACT) {
@@ -404,8 +406,13 @@ void ascend_state(){
       pstate = ustate;
     }
     else if (runAvg > 0 || gAvgXZ < gAvgXZ_prev) {
-      ustate = CONTACT;
-      //printState();
+      if (allowed >= allowance) {
+        ustate = CONTACT;
+        allowed = 0;
+      }
+      else {
+        allowed += 1;
+      }
     }
   }
 
@@ -421,12 +428,16 @@ void ascend_state(){
       pstate = ustate;
     }
     else if (runAvg <= 0 && gAvgXZ < gAvgXZ_prev) {
-      ustate = SUPPORT;
-      //printState();
+      if (allowed >= allowance) {
+        ustate = SUPPORT;
+        allowed = 0;
+      }
+      else {
+        allowed += 1;
+      }
     }
   }
 
-  // this can probably be better done with using the relative angles of the legs instead
   if (ustate == SUPPORT){
     if(pstate != ustate){
       init_time1 = millis();
@@ -449,9 +460,14 @@ void ascend_state(){
     they move their leg/are moving their leg it will trigger state to move into lift
     */
     //we keep supporting until we find that the value is above 10 or 15, since we will take 2 previous and divide by 2 to find an average (after the trough)
-    if ((gAvgXZ + gAvgXZ_prev)/2 > 10) { // at this point we slack the wire going to the leg to allow it to bend. cycle repeats
-      ustate = PRELIFT;
-      //printState();
+    if (shankThighX <= 15) { // at this point we slack the wire going to the leg to allow it to bend. cycle repeats
+      if (allowed >= allowance) { 
+        ustate = PRELIFT;
+        allowed = 0;
+      }
+      else {
+        allowed += 1;
+      }
     }
   }   
 }
@@ -463,50 +479,10 @@ void sensors(){
   I2C_HE();
 }
 /****************************************************************IMU_SENSOR_READINGS*********************************************************************/
-void  I2C_IMU(){  
-  currTime = millis(); // Current time for comp filter
-  dt = (currTime - prevTime) / 1000.0; // Time difference for integration
-  prevTime = currTime;
 
-  int16_t ax1, ay1, az1, gx1, gy1, gz1;
-  int16_t ax2, ay2, az2, gx2, gy2, gz2;
-
-  mpu1.getMotion6(&ax1, &ay1, &az1, &gx1, &gy1, &gz1);
-  mpu2.getMotion6(&ax2, &ay2, &az2, &gx2, &gy2, &gz2);
-
-
-// Converting to physical units
-
-  // // convert to +-8g's (converting to +-1g gave near-0 results) NOTE: THESE WERE KIND OF USELESS REGARDLESS SO I DIDN'T USE THEM AT ALL
-  // float accelX1 = ax1 / 4096.0; float accelY1 = ay1 / 4096.0; float accelZ1 = az1 / 4096.0;
-  // converting to degrees/s
-  float gyroX1 = gx1 / 131.0; float gyroY1 = gy1 / 131.0; float gyroZ1 = gz1 / 131.0;
-
-  // float accelX2 = ax2 / 4096.0; float accelY2 = ay2 / 4096.0; float accelZ2 = az2 / 4096.0;
-  float gyroX2 = gx2 / 131.0; float gyroY2 = gy2 / 131.0; float gyroZ2 = gz2 / 131.0;
-
-  // Update set "current value" and update running average for SHANK angular accleration
-  gAvgXZ = (gyroX1 + gyroZ1)/2;
-  updateRunningAverage(gAvgXZ);
-
-  // Calculates angles of MPU w/ complementary filter
-  float angX1 = glob_angX1, angY1 = glob_angY1; // Localizing globals to be able to pass into function
-  float angX2 = glob_angX2, angY2 = glob_angY2;
-  calcAngles(ax1, ay1, az1, gyroX1, gyroY1, angX1, angY1);
-  calcAngles(ax2, ay2, az2, gyroX2, gyroY2, angX2, angY2); 
-
-  glob_angX1 = angX1; // Sending newly calculated variables back to global
-  glob_angY1 = angY1;
-  glob_angX2 = angX2;
-  glob_angY2 = angY2; 
-
-  /////////////// TESTING AREA FOR ANGLES ///////////////
-  float shankThighX = abs(angX1 - angX2);
-  float shankThighY = abs(angY1 - angY2);
-  ///////////////////////////////////////////////////////
-
-}
-
+/*
+Helper methods
+*/
 void updateRunningAverage(float sample){
   
   runAvg -= buffer[bufferIndex] / sampleWindow; // Remove oldest sample
@@ -530,6 +506,42 @@ void calcAngles(float ax, float ay, float az, float gx, float gy, float& angX, f
 
 }
 
+void I2C_IMU(){ //basically the "loop" code
+
+  currTime = millis(); // Current time for comp filter
+  dt = (currTime - prevTime) / 1000.0; // Time difference for integration
+  prevTime = currTime;
+
+  int16_t ax1, ay1, az1, gx1, gy1, gz1;
+  int16_t ax2, ay2, az2, gx2, gy2, gz2;
+
+  mpu1.getMotion6(&ax1, &ay1, &az1, &gx1, &gy1, &gz1);
+  mpu2.getMotion6(&ax2, &ay2, &az2, &gx2, &gy2, &gz2);
+
+
+  // Converting to degrees/s
+  float gyroX1 = gx1 / 131.0; float gyroY1 = gy1 / 131.0; float gyroZ1 = gz1 / 131.0;
+  float gyroX2 = gx2 / 131.0; float gyroY2 = gy2 / 131.0; float gyroZ2 = gz2 / 131.0;
+
+  // Update set "current value" and update running average for SHANK angular accleration
+  gAvgXZ = (gyroX1 + gyroZ1)/2;
+  updateRunningAverage(gAvgXZ);
+
+  // Calculates angles of MPU w/ complementary filter
+  float angX1 = glob_angX1, angY1 = glob_angY1; // Localizing globals to be able to pass into function
+  float angX2 = glob_angX2, angY2 = glob_angY2;
+  calcAngles(ax1, ay1, az1, gyroX1, gyroY1, angX1, angY1);
+  calcAngles(ax2, ay2, az2, gyroX2, gyroY2, angX2, angY2); 
+
+  glob_angX1 = angX1; // Sending newly calculated variables back to global
+  glob_angY1 = angY1;
+  glob_angX2 = angX2;
+  glob_angY2 = angY2; 
+
+  shankThighX = abs(angX1 - angX2); // global shankThighX for use in acsend mode
+  float shankThighY = abs(angY1 - angY2);
+
+}
 
 
 /****************************************************************TENSION_SENSOR_READINGS*********************************************************************/
