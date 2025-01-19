@@ -1,22 +1,35 @@
 /***TO-DO**/
-//-Bring in position variables of 2 IMUs to figure out straight leg position
-//-Motor control during different states of ascend
+//FIGURE OUT INIT SPOOL IF STATEMENT
+//FIGURE OUT MOTOR CONTROL FOR EACH STATE
+//FIGURE OUT STRAIGHT LEG
 //-Threads for sensor readings [CANT DO THREADS, IMPLEMENTED MICROSECOND INTERUPPTS FOR SENSOR READING INSTEAD]
 //-Device active and calibration [SORTA DONE]
 //-Add led functionality with modes [SORTA DONE]
 //-Estop implmentation [DONE?]
 
 
-
-/****************************************************************PID_VAR*********************************************************************/
 #include "HX711.h" //This library can be obtained here http://librarymanager/All#Avia_HX711
 #include "PID_v2.h"
 #include "AS5600.h"
 #include "TimerOne.h"
+#include <Wire.h>
+#include <MPU6050.h>
+#include <math.h>
+
 
 #define PID_input A1
 #define PID_output 6
+#define LOADCELL_DOUT_PIN  A4
+#define LOADCELL_SCK_PIN  A3
+#define PRELIFT 0
+#define LIFT 1
+#define PRECONTACT 2
+#define CONTACT 3
+#define SUPPORT 4
+#define INVALID 5
 
+
+/****************************************************************PID_VAR********************************************************************/
 double setPoint = 0;
 volatile double tension = 0;
 volatile double error = 0;
@@ -26,47 +39,33 @@ int braked = 0;
 double Kp = 5, Ki = 0.8, Kd = 0.15;
 PID controller(&tension, &error, &setPoint, Kp, Ki, Kd, P_ON_E, DIRECT);
 
-
-//HX711 Tension Sensor Codes
-#define LOADCELL_DOUT_PIN  A1
-#define LOADCELL_SCK_PIN  A0
+/************************************************************TENSION_SENSOR_VAR**************************************************************/
 HX711 hx711;
 double sensor_noise_threshold = 1.00; //1lb noise threshold
 double upper_sensor = 8;
 double lower_sensor = 4;
 float calibration_factor = -20810;
 
-//Motor Controller
-const int mc_IN1 = 5;
-const int mc_IN2 = 4;
-const int mc_PWM = 6;
-int mc_state = 0; // 0 = brake, 1 = cw, 2 = ccw;
-int prev_mc_state = -1;
-
-
-int stopped = 0;
-char input_mode = 'b';
-
-// //PID Variables
-// double Kp = 0.0;
-// double Ki = 0.0;
-// double Kd = 0.0;
-// double set_point_deg = 0.0;
+/****************************************************************MOTOR_VAR*******************************************************************/
+const int mc_IN1 = 51;
+const int mc_IN2 = 53;
+const int mc_PWM = 4;
 
 /****************************************************************IMU_VAR*********************************************************************/
-#include <Wire.h>
-#include <MPU6050.h>
-#include <math.h>
+
 MPU6050 mpu;
 MPU6050_Base mpu2(0x69);
 
 
 // Variables to hold accelerometer and gyroscope data
-float accelX, accelY, accelZ;
-float gyroX, gyroY, gyroZ;
+float Acceleration1_X, Acceleration1_Y, Accerleration1_Z;
+float Acceleration2_X, Acceleration2_Y, Accerleration2_Z;
+float ang1_X, ang1_Y;
+float ang2_X, ang2_Y;
 
-float accelX2, accelY2, accelZ2;
-float gyroX2, gyroY2, gyroZ2;
+int imu1_time1;
+int init_time1;
+int imu2_time1;
 
 // STATE variable for holding which state our system is in
 /*
@@ -75,13 +74,9 @@ float gyroX2, gyroY2, gyroZ2;
 2 -> CONTACT (foot has contacted the floor)
 3 -> SUPPORT (from some time-step/other parameter, we know to start straightening the leg)
 */
-int ustate; 
+int ustate;
+int pstate; 
 int prevState;
-#define PRELIFT 0
-#define LIFT 1
-#define PRECONTACT 2
-#define CONTACT 3
-#define SUPPORT 4
 
 // Variables and data structures for running average, taken from the average of X and Z gyroscope values (same trend, allows for initial smoothing)
 const int sampleWindow = 5; // averages over previous 5 samples, introduces small delay
@@ -94,27 +89,25 @@ int bufferIndex = 0;
 
 
 /****************************************************************HALL_EFFECT_VAR*********************************************************************/
-
 AS5600 as5600;
 float temp_max = 0;
 float spoolAngle = 0;
 int spoolRev = 0;
+
 /****************************************************************CONTROL_VAR*********************************************************************/
 volatile int active = 0;
 //CONTROL FLOW VARIABLES
-int active_button = 43; //device init MODE
-int Idle_button = 44; //44 //IDLE MODE
-int Ascend_button = 45; //ASCEND MODE
-int Descend_button = 46; //DESCEND MODE
-int estop_button = 47; //emergency stop MODE
+int active_button = 2;//device init MODE
+int Idle_button = 18; //44 //IDLE MODE
+int Ascend_button = 19; //ASCEND MODE
+int Descend_button = 20; //DESCEND MODE
+int estop_button = 21 ; //emergency stop MODE
 
 //MODE_LED
 int Active_LED = 39;
 int Idle_LED = 40;//40
 int Ascend_LED = 41;
 int Descend_LED = 42;
-
-
 
 //TYPEDEF FOR MODE
 typedef enum {
@@ -124,14 +117,16 @@ typedef enum {
     INVALID_VALUE // For error handling
 } MODE;
 
-MODE umode = IDLE;
+MODE umode = INVALID_VALUE;
 
+int idle_once = 0;
+int first_step = 0;
 
+/****************************************************************SETUP_FUNCS*********************************************************************/
 float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
       return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-/****************************************************************SETUP_FUNCS*********************************************************************/
 void PID_init(){
   setPoint = 3;
   controller.SetOutputLimits(-255, 255);
@@ -163,10 +158,25 @@ void as5600_init() {
   Serial.println(b);
 }
 
-void mc_init() {
+void pin_init() {
+
+  //initialize Motor pins
   pinMode(mc_IN1, OUTPUT);
   pinMode(mc_IN2, OUTPUT);
   pinMode(mc_PWM, OUTPUT);
+
+  //initialize Buttons as interrupts
+  pinMode(Ascend_button, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(Ascend_button),mode_selection,FALLING);
+  pinMode(Idle_button, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(Idle_button),mode_selection,FALLING);
+  pinMode(estop_button, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(estop_button),estop,FALLING);
+
+  //initialize LEDs
+  pinMode(Active_LED, OUTPUT);
+  pinMode(Idle_LED, OUTPUT );
+  pinMode(Ascend_LED, OUTPUT);
 }
 
 void calibrate(){
@@ -196,40 +206,27 @@ void calibrate(){
 
   Serial.println("MPU6050 initialized.");
   // Print CSV header to the serial monitor
-  // Serial.println("AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ");
-  Serial.println("GyroX,GyroZ,MovingAvg,AngleX,AngleY"); 
+  // Serial.println("AccelX,AccelY,AccelZ,Acceleration1_X,Acceleration1_Y,Accerleration1_Z");
+  Serial.println("Acceleration1_X,Accerleration1_Z,MovingAvg,AngleX,AngleY"); 
 
   //calls sensors func every millisecond
   Timer1.initialize(1000); //default units of microseconds
   Timer1.attachInterrupt(sensors);
 
+  umode = IDLE;
+
 }
 
 void setup() {
+  Serial.begin(9600);
+  Wire.begin();
   //setup deviceactive button and wait for active = 1 after button press
   interrupts(); //enable interrupts
   pinMode(active_button, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(active_button),activate,FALLING);
 
-  Serial.begin(9600);
-  Wire.begin();
- 
-  //initialize motor
-  mc_init();
-
-  //initialize Buttons as interrupts
-  pinMode(Ascend_button, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(Ascend_button),mode_selection,FALLING);
-  pinMode(Idle_button, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(Idle_button),mode_selection,FALLING);
-  pinMode(estop_button, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(estop_button),estop,FALLING);
-
-  //initialize LEDs
-  pinMode(Active_LED, OUTPUT);
-  pinMode(Idle_LED, OUTPUT );
-  pinMode(Ascend_LED, OUTPUT);
-
+  //initialize pins for motor,buttons,LED
+  pin_init();
 
 }
 
@@ -251,6 +248,8 @@ void mode_selection(){
   if(digitalRead(Idle_button) == LOW && umode != IDLE && active == 1){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
       umode = IDLE;
+      idle_once = 1;
+      pstate = INVALID;
       digitalWrite(Idle_LED,HIGH);
       //digitalWrite(Active_LED,LOW);
       digitalWrite(Ascend_LED,LOW);
@@ -262,9 +261,9 @@ void mode_selection(){
       umode = ASCEND;
       //Set default to state to idle, before walking has begun
       ustate = PRELIFT;
-      prevState = ustate;
       digitalWrite(Ascend_LED,HIGH);
       digitalWrite(Idle_LED,LOW);
+      first_step = 1;
       //digitalWrite(Active_LED,LOW);
     }
   } 
@@ -281,6 +280,10 @@ void estop(){ //User manual that says after estop device must be restarted??
       digitalWrite(Idle_LED,HIGH);
       digitalWrite(Active_LED,HIGH);
       active = 0;
+      delay(200);
+      digitalWrite(Ascend_LED,LOW);
+      digitalWrite(Idle_LED,LOW);
+      digitalWrite(Active_LED,LOW);
   }
 }
 
@@ -296,6 +299,8 @@ void activate(){
     else if(active == 1 ){//User tries to turn off device
       if(umode == IDLE){//ensuring we are in IDLE mode to turn off device
         active = 0;
+        umode = INVALID_VALUE;
+        digitalWrite(Active_LED,LOW);
       }
     } 
 }
@@ -303,7 +308,7 @@ void activate(){
 /****************************************************************TOP_STATE_FUNC*********************************************************************/
 void state_detection(){
   if(umode == IDLE){
-    idle_state();
+    //idle_state();
   }
 
   else if (umode == ASCEND){
@@ -317,35 +322,56 @@ void state_detection(){
 /****************************************************************IDLE_STATE_FUNC*********************************************************************/
 void idle_state(){
   //known cable slack length, pretty much spool/unspool until halleffect detects that reading.
-  while(spoolAngle > 0 && spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
-    motor_control(200, 0);
+  if(idle_once == 1){
+    while(spoolAngle > 0 && spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
+      motor_control(200, 0);
+    }
+    motor_control(0,0);
+    idle_once = 0;
   }
-  motor_control(0,0);
 }
 /****************************************************************ASCEND_STATE_FUNC*********************************************************************/
 void ascend_state(){
+  
   if (ustate == PRELIFT) {
     /*
     Identifies that the leg is going from IDLE to beign lifted. 
     Need the gyro X value to be much larger than the running average (basically taking derivative), and need make sure that the running average
       is above some threshold to ensure we don't switch states just due to noisy sensor data
     */
-    if (gyroX >= 1.2*runAvg && runAvg >= 5) {
+    if(pstate != ustate){
+      if(!first_step){
+        while(spoolAngle > 0 && spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
+          motor_control(200, 0);
+        }
+        motor_control(0,0);
+      }
+      else{
+        first_step = 0;
+      }
+      pstate = ustate;
+    }
+    else if (Acceleration1_X >= 1.2*runAvg && runAvg >= 5) {
       ustate = LIFT;
       //printState();
     }
+
   }
 
-  if (ustate == LIFT) {
+  if (ustate == LIFT ) {
     /*
     Identifies that the leg is about to make contact with the ground.
     Need to know that the previous XZ value was negative, since it will only contact after that has happened. We also need to take "derivative" of the XZ average
     to determine when it has started becoming positive since that change is when the foot has made contact
     */
-    if (runAvg < 0 && gAvgXZ > gAvgXZ_prev) {
+    if(pstate != ustate){
+      pstate = ustate;
+    }
+    else if (runAvg < 0 && gAvgXZ > gAvgXZ_prev) {
       ustate = PRECONTACT;
       //printState();
     }
+ 
 
   }
 
@@ -355,7 +381,10 @@ void ascend_state(){
     Need to see when the moving averages goes from negative to positive when in the precontact stage, which only occurs when we have the sinusoidal looking wave in movement.
     We can use either the value going above 0, or look for a peak where the previous value is higher than the current, since there's a chance of it not crossing the 0 line
     */
-    if (runAvg > 0 || gAvgXZ < gAvgXZ_prev) {
+    if(pstate != ustate){
+      pstate = ustate;
+    }
+    else if (runAvg > 0 || gAvgXZ < gAvgXZ_prev) {
       ustate = CONTACT;
       //printState();
     }
@@ -369,7 +398,10 @@ void ascend_state(){
     Need to see seen, after making contact, we wait for a negative trend in data and for the value to be negative, since that will be the latest point we would want 
     to support (they have started adding force)
     */
-    if (runAvg <= 0 && gAvgXZ < gAvgXZ_prev) {
+    if(pstate != ustate){
+      pstate = ustate;
+    }
+    else if (runAvg <= 0 && gAvgXZ < gAvgXZ_prev) {
       ustate = SUPPORT;
       //printState();
     }
@@ -377,9 +409,21 @@ void ascend_state(){
 
   // this can probably be better done with using the relative angles of the legs instead
   if (ustate == SUPPORT){
-    if (!stopped){
-      PID_Update();
+    if(pstate != ustate){
+      init_time1 = millis();
+      imu1_time1 = ang1_X;
+      imu2_time1 = ang2_X;
+      pstate = ustate;
     }
+
+    PID_Update();
+    
+    if(millis()-init_time1 > 2000){
+      if(ang1_X < (imu1_time1+2) && ang2_X < (imu2_time1+2)){
+        motor_control(50,0);
+      }
+    }
+    
     /*
     Identifies that the leg no longer needs support.
     Need to see that the gyro value is above some threshold above 0, which has happened in every test. Resets the system into IDLE, in case they take a break, and then from IDLE if 
@@ -397,11 +441,15 @@ void ascend_state(){
 void sensors(){
   I2C_IMU();
   tension = SPI_tension();
+  I2C_HE();
 }
 /****************************************************************IMU_SENSOR_READINGS*********************************************************************/
 void  I2C_IMU(){
-  int16_t ax, ay, az, gx, gy, gz;
-  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  int16_t ax1, ay1, az1, gx1, gy1, gz1;
+  int16_t ax2, ay2, az2, gx2, gy2, gz2;
+
+  mpu.getMotion6(&ax1, &ay1, &az1, &gx1, &gy1, &gz1);
+  mpu2.getMotion6(&ax2, &ay2, &az2, &gx2, &gy2, &gz2);
 
   // // convert to +-8g's (converting to +-1g gave near-0 results) NOTE: THESE WERE KIND OF USELESS REGARDLESS SO I DIDN'T USE THEM AT ALL
   // float accelX = ax / 4096.0;
@@ -409,17 +457,24 @@ void  I2C_IMU(){
   // float accelZ = az / 4096.0;
 
   // converting to degrees/s
-  float gyroX = gx / 131.0;
-  float gyroY = gy / 131.0;
-  float gyroZ = gz / 131.0;
+  float Acceleration1_X = gx1 / 131.0;
+  float Acceleration1_Y = gy1 / 131.0;
+  float Acceleration1_Z = gz1 / 131.0;
+
+  //float Acceleration2_X = gx2 / 131.0;
+  //float Acceleration2_Y = gy2 / 131.0;
+  //float Acceleration2_Z = gz2 / 131.0;
 
   // Update set "current value" and update running average
-  gAvgXZ = (gyroX + gyroZ)/2;
+  gAvgXZ = (Acceleration1_X + Accerleration1_Z)/2;
   updateRunningAverage(gAvgXZ);
 
   // Calculates angles of MPU
-  float angX, angY;
-  calculateAngles(ax, ay, az, angX, angY);
+  ang1_X = atan2(ay1, sqrt( pow(ax1, 2) + pow(az1, 2))) * 180 / M_PI;
+  ang1_Y = atan2(ax1, sqrt( pow(ay1, 2) + pow(az1, 2))) * 180 / M_PI;
+
+  ang2_X = atan2(ay2, sqrt( pow(ax2, 2) + pow(az2, 2))) * 180 / M_PI;
+  ang2_Y = atan2(ax2, sqrt( pow(ay2, 2) + pow(az2, 2))) * 180 / M_PI;
 
 }
 
@@ -432,20 +487,14 @@ void updateRunningAverage(float sample){
   bufferIndex = (bufferIndex + 1) % sampleWindow;
 }
 
-// Calculation for angles of the MPUs, to use absolute/relative angles to help determine state
-void calculateAngles(float ax, float ay, float az, float& angX, float& angY) {//float& roll, float& pitch) {
-  // roll = atan2(ay, az) * 180 / PI;
-  // pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / PI;
-  angX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
-  angY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
-}
+
 
 /****************************************************************TENSION_SENSOR_READINGS*********************************************************************/
 double SPI_tension() { // HX711 Tension Sensor reading
   return hx711.get_units();
 }
 /****************************************************************HALL_EFFECT_SENSOR_READINGS*********************************************************************/
-void as5600_get_angle() {
+void I2C_HE() {
   static uint32_t lastTime = 0;
 
   as5600.getCumulativePosition();
