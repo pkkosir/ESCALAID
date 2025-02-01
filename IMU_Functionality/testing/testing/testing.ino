@@ -36,9 +36,9 @@
     Serial.println(100);
   }
 
-  bool TOPRINT = 1; // whether or not we send the spikes for state transitions
+  bool TOPRINT = 0; // whether or not we send the spikes for state transitions
 
-  const int count = 1;
+  const int count = 3;
   int counter = 0;
   //////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////
@@ -104,10 +104,19 @@
     float accelAngX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
     float accelAngY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
 
+  /////////////////////////////////////////////////////////////////////////////
+  ///////////////////////////// TEMP WORKING AREA /////////////////////////////
+
+  // angX = accelAngX; // old method, since new method w/ integration and comp filter worked worse
+  // angY = accelAngY;  
+  /////////////////////////////////////////////////////////////////////////////
+
+
+    
     // Gyro angles, integrated
     angX = alpha*(angX + gx*dt) + (1 - alpha)*accelAngX; //dt is global, implicit replacement of angX w/ current angX with integrated gx
     angY = alpha*(angY + gy*dt) + (1 - alpha)*accelAngY;
-
+    
   }
 
   /*
@@ -132,8 +141,8 @@
 
     // Print CSV header to the serial monitor
     // Serial.println("GyroX,GyroZ,MovingAvg,AngleX1,AngleY1,AngleX2,AngleY2,RelativeX,RelativeY"); 
-    Serial.println("ZERO,GyroX1,GyroZ1,RunAvg"); 
-    // Serial.println("angX1,angY1,angX2,angY2,shankThighX,shankThighY");
+    // Serial.println("ZEROGyroX1,GyroZ1,RunAvg"); 
+    Serial.println("RunAvg,angX1,angX2,angY1,angY2,shankThighX,shankThighY");
 
 
     //Set default to state to idle, before walking has begun
@@ -283,23 +292,34 @@
     if ((counter % count) == 0) { // prints every count-th sample only
     // Serial.print(0);
     // Serial.print(",");
-    Serial.print(gyroX1); 
-    Serial.print(",");
+    // Serial.print(gyroX1); 
+    // Serial.print(",");
     // Serial.print(gyroX2);
     // Serial.print(",");
     // Serial.print(gyroY1); 
     // Serial.print(",");
     // Serial.print(gyroY2); 
     // Serial.print(",");
-    Serial.print(gyroZ1); 
-    Serial.print(",");
+    // Serial.print(gyroZ1); 
+    // Serial.print(",");
     // Serial.println(gyroZ2); 
     // Serial.print(",");
-    Serial.println(runAvg);
-    // Serial.print(",");
-    // Serial.println(shankThighX);
-    // Serial.print(",");
-    // Serial.println(shankThighY);
+    Serial.print(runAvg);
+    Serial.print(",");
+
+    Serial.print(angX2);
+    Serial.print(",");
+    Serial.print(angX1);
+    Serial.print(",");
+    Serial.print(shankThighX);
+    Serial.print(",");
+  
+    Serial.print(",");
+    Serial.print(angY1);
+    Serial.print(",");
+    Serial.print(angY2);
+    Serial.print(",");
+    Serial.println(shankThighY);
 
     }
     counter += 1;
