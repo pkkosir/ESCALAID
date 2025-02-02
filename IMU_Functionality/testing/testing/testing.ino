@@ -25,10 +25,10 @@
   //////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////
   void printState() {
-    Serial.print(100);
-    Serial.print(",");
-    Serial.print(100);
-    Serial.print(",");
+    // Serial.print(100);
+    // Serial.print(",");
+    // Serial.print(100);
+    // Serial.print(",");
     Serial.print(100);
     Serial.print(",");
     Serial.print(100);
@@ -38,7 +38,7 @@
 
   bool TOPRINT = 0; // whether or not we send the spikes for state transitions
 
-  const int count = 1;
+  const int count = 3;
   int counter = 0;
   //////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////
@@ -65,23 +65,34 @@
   int allowed = 0;
 
   // Variables and data structures for running average, taken from the average of X and Z gyroscope values (same trend, allows for initial smoothing)
-  const int sampleWindow = 5; // averages over previous 5 samples, introduces small delay
-  float buffer[sampleWindow] = {0};
+  const int sampleWindow = 3; // averages over previous 3 samples, introduces small delay
+  float bufferX[sampleWindow] = {0};
+  float bufferZ[sampleWindow] = {0};
+
+  float runAvgX = 0; // Running average for the previous 3 values before XZ averaging
+  float runAvgZ = 0;
+
   float gAvgXZ = 0; // Calculated average of the X and Z gyroscope values
-  float gAvgXZ_prev = 0; // Buffer to store the previous average gXZ value
   float runAvg = 0;
+  float runAvg_prev = 0; // Buffer to store the previous running average for comparison
 
   int bufferIndex = 0;
 
   /*
   Helper methods
   */
-  void updateRunningAverage(float sample){
+  void updateRunningAverages(float sampleX, float sampleZ){
     
-    runAvg -= buffer[bufferIndex] / sampleWindow; // Remove oldest sample
+    runAvgX -= bufferX[bufferIndex] / sampleWindow; // Remove oldest sample
+    runAvgZ -= bufferZ[bufferIndex] / sampleWindow;
+
     // Adds next sample to buffer and updates sum
-    buffer[bufferIndex] = sample;
-    runAvg += sample / sampleWindow;
+    bufferX[bufferIndex] = sampleX;
+    bufferZ[bufferIndex] = sampleZ;
+
+    runAvgX += sampleX / sampleWindow;
+    runAvgZ += sampleZ / sampleWindow;
+
     // Incremenbts buffer index and wraps around
     bufferIndex = (bufferIndex + 1) % sampleWindow;
 
@@ -93,10 +104,19 @@
     float accelAngX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
     float accelAngY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
 
+  /////////////////////////////////////////////////////////////////////////////
+  ///////////////////////////// TEMP WORKING AREA /////////////////////////////
+
+  // angX = accelAngX; // old method, since new method w/ integration and comp filter worked worse
+  // angY = accelAngY;  
+  /////////////////////////////////////////////////////////////////////////////
+
+
+    
     // Gyro angles, integrated
     angX = alpha*(angX + gx*dt) + (1 - alpha)*accelAngX; //dt is global, implicit replacement of angX w/ current angX with integrated gx
     angY = alpha*(angY + gy*dt) + (1 - alpha)*accelAngY;
-
+    
   }
 
   /*
@@ -113,7 +133,7 @@
 
     if (!mpu1.testConnection() || !mpu2.testConnection()) {
       if (!mpu1.testConnection()) Serial.println("MPU1 failed");
-      if (!mpu1.testConnection()) Serial.println("MPU2 failed");
+      if (!mpu2.testConnection()) Serial.println("MPU2 failed");
       Serial.println("MPU6050 connection failed!");
       while (1);
     }
@@ -121,7 +141,8 @@
 
     // Print CSV header to the serial monitor
     // Serial.println("GyroX,GyroZ,MovingAvg,AngleX1,AngleY1,AngleX2,AngleY2,RelativeX,RelativeY"); 
-    Serial.println("angX1,angY1,angX2,angY2,shankThighX,shankThighY");
+    // Serial.println("ZEROGyroX1,GyroZ1,RunAvg"); 
+    Serial.println("RunAvg,angX1,angX2,angY1,angY2,shankThighX,shankThighY");
 
 
     //Set default to state to idle, before walking has begun
@@ -156,8 +177,9 @@
     float gyroX2 = gx2 / 131.0; float gyroY2 = gy2 / 131.0; float gyroZ2 = gz2 / 131.0;
 
     // Update set "current value" and update running average for SHANK angular accleration
-    gAvgXZ = (gyroX1 + gyroZ1)/2;
-    updateRunningAverage(gAvgXZ);
+    updateRunningAverages(-1*gyroX1, gyroZ1);
+    gAvgXZ = (runAvgX + runAvgZ)/2; 
+    runAvg = (gAvgXZ + runAvg_prev)/2; // Gives another "running average", taking the current calc and previous average into account (better smoothing)
 
     // Calculates angles of MPU w/ complementary filter
     float angX1 = glob_angX1, angY1 = glob_angY1; // Localizing globals to be able to pass into function
@@ -182,7 +204,7 @@
       Need the gyro X value to be much larger than the running average (basically taking derivative), and need make sure that the running average
        is above some threshold to ensure we don't switch states just due to noisy sensor data
       */
-      if (gyroX1 >= 1.2*runAvg && runAvg >= 5) {
+      if (runAvg >= 1.2*runAvg_prev && runAvg >= 5) {
         if (allowed >= allowance) {
           state = LIFT;
           if (TOPRINT) printState();
@@ -200,7 +222,7 @@
       Need to know that the previous XZ value was negative, since it will only contact after that has happened. We also need to take "derivative" of the XZ average
       to determine when it has started becoming positive since that change is when the foot has made contact
       */
-      if (runAvg < 0 && gAvgXZ > gAvgXZ_prev) {
+      if (runAvg < 0 && runAvg > runAvg_prev &&  runAvg <= -15) { // -15 clause added to avoid the case where value dips after the leg is straightened
         state = PRECONTACT;
         if (TOPRINT) printState();
       }
@@ -212,7 +234,7 @@
       Need to see when the moving averages goes from negative to positive when in the precontact stage, which only occurs when we have the sinusoidal looking wave in movement.
       We can use either the value going above 0, or look for a peak where the previous value is higher than the current, since there's a chance of it not crossing the 0 line
       */
-      if (runAvg > 0 || gAvgXZ < gAvgXZ_prev) {
+      if (runAvg > 0 || runAvg < runAvg_prev) {
         if (allowed >= allowance) {
           state = CONTACT;
           if (TOPRINT) printState();
@@ -232,7 +254,7 @@
       Need to see seen, after making contact, we wait for a negative trend in data and for the value to be negative, since that will be the latest point we would want 
       to support (they have started adding force)
       */
-      if (runAvg <= 0 && gAvgXZ < gAvgXZ_prev) {
+      if (runAvg <= 0 && runAvg < runAvg_prev) {
         if (allowed >= allowance) {
           state = SUPPORT;
           if (TOPRINT) printState();
@@ -253,7 +275,7 @@
       */
       //we keep supporting until we find that the value is above 10 or 15, since we will take 2 previous and divide by 2 to find an average (after the trough)
       // if ((gAvgXZ + gAvgXZ_prev)/2 > 10) { 
-      if (shankThighX <= 15) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
+        if (shankThighX <= 15) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
         if (allowed >= allowance) { 
           state = IDLE;
           if (TOPRINT) printState();
@@ -265,15 +287,39 @@
       }
     }
     
+    runAvg_prev = runAvg;
     // Send data to the serial monitor for logging
     if ((counter % count) == 0) { // prints every count-th sample only
-    // Serial.print(gyroX1);
+    // Serial.print(0);
     // Serial.print(",");
-    // Serial.print(gyroZ1);
+    // Serial.print(gyroX1); 
+    // Serial.print(",");
+    // Serial.print(gyroX2);
+    // Serial.print(",");
+    // Serial.print(gyroY1); 
+    // Serial.print(",");
+    // Serial.print(gyroY2); 
+    // Serial.print(",");
+    // Serial.print(gyroZ1); 
+    // Serial.print(",");
+    // Serial.println(gyroZ2); 
     // Serial.print(",");
     Serial.print(runAvg);
     Serial.print(",");
-    Serial.println(shankThighX);
+
+    Serial.print(angX2);
+    Serial.print(",");
+    Serial.print(angX1);
+    Serial.print(",");
+    Serial.print(shankThighX);
+    Serial.print(",");
+  
+    Serial.print(",");
+    Serial.print(angY1);
+    Serial.print(",");
+    Serial.print(angY2);
+    Serial.print(",");
+    Serial.println(shankThighY);
 
     }
     counter += 1;
