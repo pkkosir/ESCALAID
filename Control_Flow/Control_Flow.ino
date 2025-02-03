@@ -150,6 +150,8 @@ int idle_once = 0;
 int first_step = 0;
 int cal = 1;
 int stop = 0;
+float battery_volt = 0;
+int low_power = 0;
 
 /****************************************************************SETUP_FUNCS*********************************************************************/
 float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
@@ -242,7 +244,7 @@ void calibrate(){
   // //calls sensors func every millisecond
   // Timer1.initialize(150000); //default units of microseconds
   // Timer1.attachInterrupt(sensors);
-
+  battery_volt = fmap(analogRead(A9),0,1023,0,5.2);
   Serial.println("CALSETDONE");
   delay(100);
 
@@ -291,8 +293,8 @@ void loop() {
       //Serial.println("sensor_read");
       state_detection();
       //Serial.println("State_swap");
-      Serial.println(spoolRev);
-      Serial.println(spoolAngle);
+      //Serial.println(spoolRev);
+      //Serial.println(spoolAngle);
       //Serial.println(glob_angX2);
       //Serial.println(ustate);
     }
@@ -328,7 +330,7 @@ void mode_selection(){
     }   
   } 
   //ASCEND MODE BUTTON PRESS
-  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1){
+  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1 && low_power == 0){
     if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
       umode = ASCEND;
       //Set default to state to idle, before walking has begun
@@ -347,13 +349,13 @@ void estopFlag(){
 }
 
 void estop(){ //User manual that says after estop device must be restarted??
-  Serial.print("R");
+  Serial.println("error");
   while(spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
     motor_control(200, 1);
     sensors();
     Serial.println("f");
   }
-  while (spoolAngle < 95){
+  while (spoolAngle < 80){
     motor_control(200, 1);
     sensors();
     Serial.println("g");
@@ -423,6 +425,7 @@ void idle_state(){
   }
 }
 /****************************************************************ASCEND_STATE_FUNC*********************************************************************/
+int tstart, tend;
 void ascend_state(){
   
   if (ustate == PRELIFT) {
@@ -444,6 +447,9 @@ void ascend_state(){
         }
         else{
         motor_control(0,0);
+        tend = millis();
+        Serial.println(tend-tstart);
+        delay(1000);
         pstate = ustate;
         }
       }
@@ -547,10 +553,11 @@ void ascend_state(){
     }
 
     PID_Update();
-    if (abs(glob_angX1) >= 60 && abs(glob_angX2) >= 70) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
+    if (abs(glob_angX1) >= 70 && abs(glob_angX2) >= 75) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
         if (allowed >= allowance) { 
           ustate = PRELIFT;
           motor_control(0,0);
+          tstart = millis();
           allowed = 0;
         }
         else {
@@ -590,10 +597,23 @@ void ascend_state(){
 /****************************************************************SENSOR_TOP_LEVEL*********************************************************************/
 void sensors(){
   currTime = millis();
+
   if (currTime - lastTime >= 20){
-    I2C_IMU();
-    SPI_tension();
-    I2C_HE();
+    if(battery_volt < 2){
+      //estop();
+      Serial.print(battery_volt);
+    }
+    else if(battery_volt < 3.33){
+      umode = IDLE;
+      low_power = 1;
+    }
+    else{
+      battery_volt = fmap(analogRead(A9),0,1023,0,5.2); 
+      I2C_IMU();
+      SPI_tension();
+      I2C_HE();
+    }
+
   }
 }
 /****************************************************************IMU_SENSOR_READINGS*********************************************************************/
