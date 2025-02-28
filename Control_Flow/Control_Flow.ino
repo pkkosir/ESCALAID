@@ -11,10 +11,9 @@
 #include "HX711.h" //This library can be obtained here http://librarymanager/All#Avia_HX711
 #include "PID_v2.h"
 #include "AS5600.h"
-#include "TimerOne.h"
 #include <Wire.h>
 #include <MPU6050.h>
-#include <math.h>
+#include <math.h> 
 
 
 #define PID_input A1
@@ -59,6 +58,7 @@ float Acceleration1_X, Acceleration1_Y, Accerleration1_Z;
 float Acceleration2_X, Acceleration2_Y, Accerleration2_Z;
 float ang1_X, ang1_Y;
 float ang2_X, ang2_Y;
+float gyroX_IMU2;
 
 // Variables for global angle data
 float glob_angX1 = 0, glob_angY1 = 0;
@@ -159,7 +159,7 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
 }
 
 void PID_init(){
-  setPoint = 20;
+  setPoint = 30;
   controller.SetOutputLimits(-255, 255);
   controller.SetMode(AUTOMATIC);
 }
@@ -294,8 +294,8 @@ void loop() {
       state_detection();
       //Serial.println("State_swap");
       //Serial.println(spoolRev);
-      //Serial.println(spoolAngle);
-      //Serial.println(glob_angX2);
+      Serial.println(glob_angX1);
+      Serial.println(glob_angX2);
       //Serial.println(ustate);
     }
   }
@@ -320,7 +320,7 @@ void mode_selection(){
 
    //IDLE MODE BUTTON PRESS
   if(digitalRead(Idle_button) == LOW && umode != IDLE && active == 1){
-    if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
+    if(tension<3 && abs(glob_angX1) >= 75 && abs(glob_angX2) >= 65){ //check for straight leg and no load
       umode = IDLE;
       idle_once = 1;
       pstate = INVALID;
@@ -331,7 +331,8 @@ void mode_selection(){
   } 
   //ASCEND MODE BUTTON PRESS
   if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1 && low_power == 0){
-    if(tension<3 && gAvgXZ < 10){ //check for straight leg and no load
+    Serial.println("here");
+    if(tension<3 && abs(glob_angX1) >= 75 && abs(glob_angX2) >= 65){ //check for straight leg and no load
       umode = ASCEND;
       //Set default to state to idle, before walking has begun
       ustate = PRELIFT;
@@ -553,7 +554,11 @@ void ascend_state(){
     }
 
     PID_Update();
-    if (abs(glob_angX1) >= 70 && abs(glob_angX2) >= 75) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
+
+
+//    if ((abs(glob_angX1) >= 80 && abs(glob_angX1) <= 85 && abs(glob_angX2) <= 75 && abs(glob_angX2) >= 70) || (abs(gyroX_IMU2) < 8 && abs(glob_angX2) > 65)) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
+    if ((abs(glob_angX1) >= 80 && abs(glob_angX1) <= 85 && abs(glob_angX2) <= 75 && abs(glob_angX2) >= 70)) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
+
         if (allowed >= allowance) { 
           ustate = PRELIFT;
           motor_control(0,0);
@@ -598,12 +603,12 @@ void ascend_state(){
 void sensors(){
   currTime = millis();
 
-  if (currTime - lastTime >= 20){
-    if(battery_volt < 2){
+  if (currTime - lastTime >= 10){
+    if(battery_volt < -1){//battery_volt < 2
       //estop();
       Serial.print(battery_volt);
     }
-    else if(battery_volt < 3.33){
+    else if(battery_volt < -1){// < 3.33
       umode = IDLE;
       low_power = 1;
     }
@@ -612,6 +617,10 @@ void sensors(){
       I2C_IMU();
       SPI_tension();
       I2C_HE();
+      if (tension > 67){
+        Serial.println(tension);
+        estop();
+      }
     }
 
   }
@@ -667,6 +676,7 @@ void I2C_IMU(){ //basically the "loop" code
   float gyroX1 = gx1 / 131.0; float gyroY1 = gy1 / 131.0; float gyroZ1 = gz1 / 131.0;
   float gyroX2 = gx2 / 131.0; float gyroY2 = gy2 / 131.0; float gyroZ2 = gz2 / 131.0;
 
+  gyroX_IMU2 = gyroX2;
   updateRunningAverages(-1*gyroX1,gyroZ1);
   gAvgXZ = (runAvgX + runAvgZ)/2; 
   runAvg = (gAvgXZ + runAvg_prev)/2; // Gives another "running average", taking the current calc and previous average into account (better smoothing)
