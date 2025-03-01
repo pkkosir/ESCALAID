@@ -1,4 +1,4 @@
-#include "HX711.h" //This library can be obtained here http://librarymanager/All#Avia_HX711
+ #include "HX711.h" //This library can be obtained here http://librarymanager/All#Avia_HX711
 #include "PID_v2.h"
 #include "AS5600.h"
 #include <Wire.h>
@@ -17,7 +17,7 @@ volatile double error = 0;
 int output = 0;
 int dir = -1, lastDir = -1; //1 is cw, 0 is ccw
 int braked = 0;
-double Kp = 1.5, Ki = 0.00, Kd = 0.04;
+double Kp = 2, Ki = 0.00, Kd = 0.00;
 int in = 0;
 PID controller(&tension, &error, &setPoint, Kp, Ki, Kd, P_ON_E, DIRECT);
 
@@ -53,6 +53,7 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
 
 void PID_init(){
   setPoint = 50;
+  controller.SetSampleTime(25);
   controller.SetOutputLimits(-255, 255);
   controller.SetMode(AUTOMATIC);
 }
@@ -65,16 +66,21 @@ void HX711_setup() { // HX711 Tension Sensor Init
   //Serial.print("Zero factor: "); //This can be used to remove the need to tare the scale. Useful in permanent scale projects.
   //Serial.println(zero_factor);
   hx711.set_scale(calibration_factor); //Adjust to this calibration factor
+  Serial.println("cala");
  }
 
 void as5600_init() {
 
+  Serial.println("here1");
   as5600.begin(4);  //  set direction pin.
+  Serial.println("here2");
   as5600.setDirection(AS5600_CLOCK_WISE);  //  default, just be explicit.
 
-  //Serial.println(as5600.getAddress());
+  Serial.println(as5600.getAddress());
 
-  //int b = as5600.isConnected();
+  int b = as5600.isConnected();
+
+  Serial.println(b);
 
 }
 
@@ -114,7 +120,8 @@ void calibrate(){
 
 
   //initialize Hall effect Sensor
-  //as5600_init();
+  as5600_init();
+  Serial.println("hally ded");
 
   delay(100);
 }
@@ -133,21 +140,22 @@ void setup() {
   calibrate();
   interrupts(); //enable interrupts
   pin_init();
-  Serial.println("here");
+  Serial.println("timestamp,setpoint,tension,error,output");
 
   //Serial.println("DONE SETUP");
 }
 
 void loop() {
   if (digitalRead(Ascend_button)){
-    PID_Update();
-    SPI_tension();
+    //PID_Update();
+    //SPI_tension();
+    sensors();
     //Serial.println(millis());
-    //Serial.println(tension);
+    Serial.println(spoolAngle);
   }
   else{
     motor_control(200,1);
-    delay(1000);
+    delay(2000);
     motor_control(0,0);
     reset = 0;
     delay(2000);
@@ -183,8 +191,8 @@ void estop(){ //User manual that says after estop device must be restarted??
 }
 
 void sensors(){
-  SPI_tension();
-  //I2C_HE();
+  //SPI_tension();
+  I2C_HE();
 }
 
 void SPI_tension() { // HX711 Tension Sensor reading
@@ -244,16 +252,18 @@ void PID_Update(){
 
   (error >= 0) ? dir = 0: dir = 1;
   float errC = constrain(error, -20, 20);
-  (dir == 1) ? output = fmap(abs(errC), 0, 20, 120, 200): output = fmap(abs(errC), 0, 20, 200,250);
+  (dir == 1) ? output = fmap(abs(errC), 0, 20, 120, 160): output = fmap(abs(errC), 0, 20, 200,255);
   (tension <= 1) ? output = 255: output = output;
 
   Serial.print(millis());
   Serial.print(",");
-  //Serial.print(setPoint);
-  //Serial.print(",");
-  Serial.println(tension);
-  //Serial.print(",");
-  //Serial.println(errC);
+  Serial.print(setPoint);
+  Serial.print(",");
+  Serial.print(tension);
+  Serial.print(",");
+  Serial.print(errC);
+  Serial.print(",");
+  Serial.println(output);
 
   // if (dir == 1 && in == 1){
   //   setPoint = setPoint - 10;
@@ -263,7 +273,7 @@ void PID_Update(){
   //   setPoint = setPoint + 10;
   //   in = 1;
   // }
-   if (abs(errC) < 3){
+   if (abs(errC) < 5){
     motor_control(0,dir);
    }
    else{

@@ -1,3 +1,5 @@
+#include <AS5600.h>
+
 /***TO-DO**/
 //FIGURE OUT INIT SPOOL IF STATEMENT
 //FIGURE OUT MOTOR CONTROL FOR EACH STATE
@@ -159,7 +161,8 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
 }
 
 void PID_init(){
-  setPoint = 30;
+  setPoint = 50;
+  controller.SetSampleTime(25);
   controller.SetOutputLimits(-255, 255);
   controller.SetMode(AUTOMATIC);
 }
@@ -179,9 +182,9 @@ void as5600_init() {
   as5600.begin(4);  //  set direction pin.
   as5600.setDirection(AS5600_CLOCK_WISE);  //  default, just be explicit.
 
-  //Serial.println(as5600.getAddress());
+  Serial.println(as5600.getAddress());
 
-  //int b = as5600.isConnected();
+  int b = as5600.isConnected();
 
 }
 
@@ -291,7 +294,7 @@ void loop() {
     else{
       sensors();
       //Serial.println("sensor_read");
-      state_detection();
+      //state_detection();
       //Serial.println("State_swap");
       //Serial.println(spoolRev);
       Serial.println(glob_angX1);
@@ -756,20 +759,23 @@ void mc_speed(int mc_speed){ //Set speed=0 to brake
 
 
 /****************************************************************PID_FUNC*********************************************************************/
+
 void PID_Update(){
   controller.Compute();
 
   (error >= 0) ? dir = 0: dir = 1;
   float errC = constrain(error, -20, 20);
-  (dir == 1) ? output = fmap(abs(errC), 0, 20, 100, 150): output = fmap(abs(errC), 0, 20, 190,230);
+  (dir == 1) ? output = fmap(abs(errC), 0, 20, 120, 160): output = fmap(abs(errC), 0, 20, 200,255);
+  (tension <= 1) ? output = 255: output = output;
 
-  Serial.print("TENSION ---- ");
+  Serial.print(millis());
+  Serial.print(",");
+  Serial.print(setPoint);
+  Serial.print(",");
   Serial.print(tension);
-  Serial.print("---- DIRECTION ---- ");
-  Serial.print(dir);
-  Serial.print(" ---- ERROR ---- ");
+  Serial.print(",");
   Serial.print(errC);
-  Serial.print(" ---- OUTPUT ---- ");
+  Serial.print(",");
   Serial.println(output);
 
   // if (dir == 1 && in == 1){
@@ -780,13 +786,12 @@ void PID_Update(){
   //   setPoint = setPoint + 10;
   //   in = 1;
   // }
-   if (abs(errC) < 4){
+   if (abs(errC) < 5){
     motor_control(0,dir);
    }
    else{
     motor_control(output,dir);
    }
-  delay(50);
 }
 
 
