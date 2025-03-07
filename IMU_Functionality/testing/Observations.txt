@@ -1,0 +1,19 @@
+Observations:
+
+X1 is the best for tracking our movement (shin X direction).
+
+X2 follows X1, but with slight delay. May be good for smoothing but we will see how numbers work out. 
+
+Contact happens when there is a jolt, after the initial sinusoidal looking impact. The acceleration change goes to 0, X1 ~-5 and X2 ~0. Should hold for 10 samples of ~0 after we see high peak to detect weight acceptance. 
+
+Y data generally useless, doesn't really move much. Has noticeable change at contact, but we don't really care
+
+Z data likewise not overly useful
+
+Peaks in X ALWAYS go above 25. When stationary even w/ noise will not go above generally. Can be used as threshold for high peak
+
+Adding X1 and X2 does remove some subtractive noise. may be effective method of initial data cleaning
+
+Since angle starts at 0, it takes a while to correct itself to 120. should change initial angle to 135 (between straight and bent leg, least amount of correction time hopefully). 
+
+Above 140 for 5-10 samples SHOULD be sufficient for detecting that we're done using PID. Sufficient for ready to weight bear should be 10-15 samples 
