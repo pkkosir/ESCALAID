@@ -22,7 +22,8 @@
 #define PID_output 6
 #define LOADCELL_DOUT_PIN  A4
 #define LOADCELL_SCK_PIN  A3
-#define BAUDRATE 115200
+#define BAUDRATE 9600
+#define INIT_ANGLE 40
 
 /****************************************************************PID_VAR********************************************************************/
 double setPoint = 0;
@@ -31,7 +32,7 @@ volatile double error = 0;
 int output = 0;
 int dir = -1, lastDir = -1; //1 is cw, 0 is ccw
 int braked = 0;
-double Kp = 0.5, Ki = 0.01, Kd = 0.05;
+double Kp = 2, Ki = 0.0, Kd = 0.0;
 int in = 0;
 PID controller(&tension, &error, &setPoint, Kp, Ki, Kd, P_ON_E, DIRECT);
 
@@ -52,69 +53,125 @@ const int mc_PWM = 4;
 MPU6050 mpu1;
 MPU6050 mpu2(0x69); // Second MPU6050 with address 0x69
 
+#define ANGLE 135 // Defines the angle used for threshold of PID stopping
 
-
-
-// Variables to hold accelerometer and gyroscope data
-float Acceleration1_X, Acceleration1_Y, Accerleration1_Z;
-float Acceleration2_X, Acceleration2_Y, Accerleration2_Z;
-float ang1_X, ang1_Y;
-float ang2_X, ang2_Y;
-float gyroX_IMU2;
-
-// Variables for global angle data
-float glob_angX1 = 0, glob_angY1 = 0;
-float glob_angX2 = 0, glob_angY2 = 0;
+// Variables to hold the global angle data
+float glob_angX1 = 65, glob_angY1 = 0; //defaults changed to take less time to find correct angle. CHECK THESE!!!!!!!!!!!
+float glob_angX2 = -65, glob_angY2 = 0;
+float angX1 = 0;
+float angX2 = 0;
+float angY1 = 0;
+float angY2 = 0;
+float shankThighX;
+float init_shankThighX;
 
 // Variables for the complementary filter for more accurate angle measurements
 unsigned long prevTime = 0;
 unsigned long currTime = 0;
-unsigned long lastTime = 0; //sensors time var
-float dt; 
-float alpha = 0.96;
 
+unsigned long lastTime = 0;
+unsigned long presTime = 0;
+float dt;
+float alpha = 0.7;
+bool TOPRINT = 1;  // whether or not we send the spikes for state transitions
+const int count = 1;  // for outputting every "count-th" sample
+int counter = 0;
+
+// STATE variable for holding which state our system is in
+/*
+  0 -> IDLE
+  1 -> TROUGH (foot is being lifted up, not giving support)
+  2 -> PEAK (foot is on downswing, used for internal tracking purposes)
+  4 -> SUPPORT (from some number of samples aroudn 0, we know to start straightening the leg)
+  */
+int ustate;
+int pstate;
+int prevState;
+#define PRELIFT 0
+#define TROUGH 1
+#define PEAK 2
+#define SUPPORT 3
+#define INVALID 4
+
+// Allowance for outliers when checking for trends in the state transitions
+const int allowance = 1;  // just 1 outlier for now, ensures that we don't preemptively change states
+int allowed = 0;
+
+// Variables and data structures for running average, taken from the average of X and Z gyroscope values (same trend, allows for initial smoothing)
+const int sampleWindow = 2;  // averages over previous 2 samples, introduces small delay
+float bufferX1[sampleWindow] = { 0 };
+float bufferX2[sampleWindow] = { 0 };
+
+// float combX = 0;
+float runAvgX1 = 0;  // Running average for the previous 2 values
+float runAvgX2 = 0;  // Running average for the previous 2 values
+
+int bufferIndex = 0;
 
 int imu1_time1;
 int init_time1;
 int imu2_time1;
 
-// STATE variable for holding which state our system is in
-/*
-0 -> PRELIFT
-1 -> LIFT (foot is being lifted up, not giving support)
-2 -> PRECONTACT (foot is on downswing, used for internal tracking purposes)
-3 -> CONTACT (foot has contacted the floor)
-4 -> SUPPORT (from tension difference, we know to start straightening the leg)
-*/
-int ustate;
-int pstate; 
-int prevState;
+// // Variables to hold accelerometer and gyroscope data
+// float Acceleration1_X, Acceleration1_Y, Accerleration1_Z;
+// float Acceleration2_X, Acceleration2_Y, Accerleration2_Z;
+// float ang1_X, ang1_Y;
+// float ang2_X, ang2_Y;
+// float gyroX_IMU2;
 
-#define PRELIFT 0
-#define LIFT 1
-#define PRECONTACT 2
-#define CONTACT 3
-#define SUPPORT 4
-#define INVALID 5
+// // Variables for global angle data
+// float glob_angX1 = 0, glob_angY1 = 0;
+// float glob_angX2 = 0, glob_angY2 = 0;
 
-// Allowance for outliers when checking for trends in the state transitions
-const int allowance = 1; // just 1 outlier for now, ensures that we don't preemptively change states
-int allowed = 0;
+// // Variables for the complementary filter for more accurate angle measurements
+// unsigned long prevTime = 0;
+//unsigned long currTime = 0;
+//unsigned long lastTime = 0; //sensors time var
+// float dt; 
+// float alpha = 0.96;
 
-// Variables and data structures for running average, taken from the average of X and Z gyroscope values (same trend, allows for initial smoothing)
-const int sampleWindow = 3; // averages over previous 5 samples, introduces small delay
-float buffer[sampleWindow] = {0};
-float bufferX[sampleWindow] = {0};
-float bufferZ[sampleWindow] = {0};
-float gAvgXZ = 0; // Calculated average of the X and Z gyroscope values
-float gAvgXZ_prev = 0; // Buffer to store the previous average gXZ value
-float runAvg = 0;
-float runAvg_prev = 0; // Buffer to store the previous running average for comparison
-float shankThighX = 0;
-float runAvgX = 0; // Running average for the previous 3 values before XZ averaging
-float runAvgZ = 0;
 
-int bufferIndex = 0;
+// int imu1_time1;
+// int init_time1;
+// int imu2_time1;
+
+// // STATE variable for holding which state our system is in
+// /*
+// 0 -> PRELIFT
+// 1 -> LIFT (foot is being lifted up, not giving support)
+// 2 -> PRECONTACT (foot is on downswing, used for internal tracking purposes)
+// 3 -> CONTACT (foot has contacted the floor)
+// 4 -> SUPPORT (from tension difference, we know to start straightening the leg)
+// */
+// int ustate;
+// int pstate; 
+// int prevState;
+
+// #define PRELIFT 0
+// #define LIFT 1
+// #define PRECONTACT 2
+// #define CONTACT 3
+// #define SUPPORT 4
+// #define INVALID 5
+
+// // Allowance for outliers when checking for trends in the state transitions
+// const int allowance = 1; // just 1 outlier for now, ensures that we don't preemptively change states
+// int allowed = 0;
+
+// // Variables and data structures for running average, taken from the average of X and Z gyroscope values (same trend, allows for initial smoothing)
+// const int sampleWindow = 3; // averages over previous 5 samples, introduces small delay
+// float buffer[sampleWindow] = {0};
+// float bufferX[sampleWindow] = {0};
+// float bufferZ[sampleWindow] = {0};
+// float gAvgXZ = 0; // Calculated average of the X and Z gyroscope values
+// float gAvgXZ_prev = 0; // Buffer to store the previous average gXZ value
+// float runAvg = 0;
+// float runAvg_prev = 0; // Buffer to store the previous running average for comparison
+// float shankThighX = 0;
+// float runAvgX = 0; // Running average for the previous 3 values before XZ averaging
+// float runAvgZ = 0;
+
+// int bufferIndex = 0;
 
 /****************************************************************HALL_EFFECT_VAR*********************************************************************/
 AS5600 as5600;
@@ -172,8 +229,6 @@ void HX711_setup() { // HX711 Tension Sensor Init
   hx711.set_scale();
   hx711.tare();  //Reset the scale to 0
   long zero_factor = hx711.read_average(); //Get a baseline reading
-  //Serial.print("Zero factor: "); //This can be used to remove the need to tare the scale. Useful in permanent scale projects.
-  //Serial.println(zero_factor);
   hx711.set_scale(calibration_factor); //Adjust to this calibration factor
 }
 
@@ -181,9 +236,7 @@ void as5600_init() {
 
   as5600.begin(4);  //  set direction pin.
   as5600.setDirection(AS5600_CLOCK_WISE);  //  default, just be explicit.
-
   Serial.println(as5600.getAddress());
-
   int b = as5600.isConnected();
 
 }
@@ -239,16 +292,10 @@ void calibrate(){
 
   // Identifies previous time for use in complementary filter
   prevTime = millis();
-    
-
-
   umode = IDLE;
 
-  // //calls sensors func every millisecond
-  // Timer1.initialize(150000); //default units of microseconds
-  // Timer1.attachInterrupt(sensors);
   battery_volt = fmap(analogRead(A9),0,1023,0,5.2);
-  Serial.println("CALSETDONE");
+  Serial.println("CAL_DONE");
   delay(100);
 
 }
@@ -274,15 +321,12 @@ void setup() {
 /****************************************************************LOOP_FUNC*********************************************************************/
 void loop() {
   
-  Serial.println("LOOP");
-  delay(200);
   //calibrate once everytime we are active
   if(cal == 1 && active == 1){
     calibrate();
     cal = 0;
     Serial.println("Calibrated");
   }
-  
   //while active get sensor reading and execute flow
   if(active == 1){
     if (stop){
@@ -292,14 +336,8 @@ void loop() {
       active = 0;
     }
     else{
-      sensors();
-      //Serial.println("sensor_read");
-      //state_detection();
-      //Serial.println("State_swap");
-      //Serial.println(spoolRev);
-      Serial.println(glob_angX1);
-      Serial.println(glob_angX2);
-      //Serial.println(ustate);
+      sensors(); //read_sensors
+      state_detection(); //executes appropriate mode functionality
     }
   }
   else{
@@ -308,34 +346,30 @@ void loop() {
     }
     activate();
   }
-
-  if(umode == IDLE){
-     Serial.print("IDLE");
-   }
-  if(umode == ASCEND){
-     Serial.println("ASCEND");
-  }
-
 }
 
 /****************************************************************BUTTON_MODE_FUNC*********************************************************************/
 void mode_selection(){
-
+      Serial.print(shankThighX);
+    Serial.print(",");
+    Serial.println(tension);
    //IDLE MODE BUTTON PRESS
   if(digitalRead(Idle_button) == LOW && umode != IDLE && active == 1){
-    if(tension<3 && abs(glob_angX1) >= 75 && abs(glob_angX2) >= 65){ //check for straight leg and no load
+    if(tension<3 && shankThighX >= 120){ //check for straight leg and no load
       umode = IDLE;
       idle_once = 1;
       pstate = INVALID;
       digitalWrite(Idle_LED,HIGH);
-      //digitalWrite(Active_LED,LOW);
       digitalWrite(Ascend_LED,LOW);
     }   
   } 
   //ASCEND MODE BUTTON PRESS
-  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1 && low_power == 0){
-    Serial.println("here");
-    if(tension<3 && abs(glob_angX1) >= 75 && abs(glob_angX2) >= 65){ //check for straight leg and no load
+  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1 && low_power == 0){//low power == 1?
+
+    Serial.print(shankThighX);
+    Serial.print(",");
+    Serial.println(tension);
+    if(tension<3 && shankThighX >= 120){ //check for straight leg and no load
       umode = ASCEND;
       //Set default to state to idle, before walking has begun
       ustate = PRELIFT;
@@ -343,7 +377,6 @@ void mode_selection(){
       digitalWrite(Ascend_LED,HIGH);
       digitalWrite(Idle_LED,LOW);
       first_step = 1;
-      //digitalWrite(Active_LED,LOW);
     }
   } 
 }
@@ -352,20 +385,16 @@ void estopFlag(){
   stop = 1;
 }
 
-void estop(){ //User manual that says after estop device must be restarted??
+void estop(){ 
   Serial.println("error");
-  while(spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
-    motor_control(200, 1);
+  while(spoolRev != 0){//check if the original spool position is reached
+    motor_control(255, 1);
     sensors();
-    Serial.println("f");
   }
-  while (spoolAngle < 80){
-    motor_control(200, 1);
+  while (spoolAngle < INIT_ANGLE){
+    motor_control(230, 1);
     sensors();
-    Serial.println("g");
   }
-
-  Serial.println("out");
   motor_control(0,0);
   noInterrupts(); //disable interuppt
   while(1){ //stuck in all lights ON indicating user to restart device.
@@ -384,7 +413,7 @@ void activate(){
     if (active == 0){//User turns on device
       active = 1;
       digitalWrite(Ascend_LED,LOW);
-      digitalWrite(Idle_LED,LOW);
+      digitalWrite(Idle_LED,HIGH);
       digitalWrite(Active_LED,HIGH);
       umode = IDLE;
       cal = 1;
@@ -394,6 +423,8 @@ void activate(){
         active = 0;
         umode = INVALID_VALUE;
         digitalWrite(Active_LED,LOW);
+        digitalWrite(Ascend_LED,LOW);
+        digitalWrite(Idle_LED,LOW);
       }
     } 
 }
@@ -414,13 +445,12 @@ void state_detection(){
 }
 /****************************************************************IDLE_STATE_FUNC*********************************************************************/
 void idle_state(){
-  //known cable slack length, pretty much spool/unspool until halleffect detects that reading.
   if(idle_once == 1){
     if(spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
-      motor_control(200, 1);
+      motor_control(255, 1);
     }
-    else if (spoolAngle < 80){
-      motor_control(200, 1);
+    else if (spoolAngle < INIT_ANGLE){
+      motor_control(230, 1);
     }
     else{
     motor_control(0,0);
@@ -434,116 +464,74 @@ void ascend_state(){
   
   if (ustate == PRELIFT) {
     Serial.println("PRELIFT");
-    /*
-    Identifies that the leg is going from IDLE to beign lifted. 
-    Need the gyro X value to be much larger than the running average (basically taking derivative), and need make sure that the running average
-      is above some threshold to ensure we don't switch states just due to noisy sensor data
-    */
+
     if(pstate != ustate){
       if(!first_step){
-        Serial.println("hewwo");
-        //delay(500);
-        if(spoolRev != 0){//checking the halleffect sensor reading to see if the original position is reached, which is the idle state fixed slack position
-          motor_control(230, 1);
+        if(spoolRev != 0){
+          motor_control(255, 1);
         }
-        else if (spoolAngle < 80){
+        else if (spoolAngle < INIT_ANGLE){
           motor_control(230, 1);
         }
         else{
         motor_control(0,0);
         tend = millis();
-        Serial.println(tend-tstart);
-        delay(1000);
         pstate = ustate;
         }
       }
       else{
-        //Serial.println("first step");
-        //delay(250);
         first_step = 0;
         pstate = ustate;
       }
     }
-    else if (runAvg >= 1.2*runAvg_prev && runAvg >= 5) {
-    //else if (glob_angX1 > 50){
-      if (allowed >= allowance) { // outlier allowance
-          ustate = LIFT;
-          allowed = 0;
-        }
-        else {
-          allowed += 1;
-        };
-    }
-
-  }
-
-  if (ustate == LIFT ) { // NOTE: no outlier detection for this, we want to know about this event happening ASAP and if it happens due to outlier it's non-consequential
-      Serial.println("LIFT");
-  
-    /*
-    Identifies that the leg is about to make contact with the ground.
-    Need to know that the previous XZ value was negative, since it will only contact after that has happened. We also need to take "derivative" of the XZ average
-    to determine when it has started becoming positive since that change is when the foot has made contact
-    */
-    if(pstate != ustate){
-      pstate = ustate;
-    }
-    else if (runAvg < 0 && runAvg > runAvg_prev && runAvg <= -15) { // -15 clause added to avoid the case where value dips after the leg is straightened
-    //else if (glob_angX1 < 50 && glob_angX1 > 20){
-      ustate = PRECONTACT;
-    }
-  }
-
-  if (ustate == PRECONTACT) {
-    Serial.println("PRECONTACT");
-
-    /*
-    Identifies when the leg actually makes CONTACT with the ground.
-    Need to see when the moving averages goes from negative to positive when in the precontact stage, which only occurs when we have the sinusoidal looking wave in movement.
-    We can use either the value going above 0, or look for a peak where the previous value is higher than the current, since there's a chance of it not crossing the 0 line
-    */
-    if(pstate != ustate){
-      pstate = ustate;
-    }
-    else if (runAvg > 0 || runAvg < runAvg_prev) {
-    //else if (glob_angX1 < 20 && glob_angX1 > -20){
+    if (runAvgX1 <= -40 || runAvgX2 <= -40) { //trough ALWAYS below -40
       if (allowed >= allowance) {
-        ustate = CONTACT;
+        ustate = TROUGH; 
         allowed = 0;
-      }
-      else {
+      } else {
         allowed += 1;
       }
     }
   }
 
-  // NAIVE WAY OF CHECKING FOR WEIGHT ACCEPTANCE: USE THE HUMP THAT HAPPENS AFTER WE'VE MADE CONTACT
-  // BETTER WAY OF CHECKING FOR WEIGHT ACCEPTANCE: TIGHETEN UNTIL WE FEEL TENSION IN THE STRING, THEN STOP UNTIL WE SEE THAT THERE IS NO TENSION (MEANS THE PERSON HAS STARTED STRAIGHTENING THEIR LEG)
-  if (ustate == CONTACT) {
-    Serial.println("CONTACT");
+  if (ustate == TROUGH) {
+    Serial.println("TROUGH");
 
-    /*
-    Identifies when the leg needs SUPPORT from the system.
-    Need to see seen, after making contact, we wait for a negative trend in data and for the value to be negative, since that will be the latest point we would want 
-    to support (they have started adding force)
-    */
     if(pstate != ustate){
       pstate = ustate;
     }
-    // else if (runAvg <= 0 && runAvg < runAvg_prev) {
-    //   if (allowed >= allowance) {
-    //     ustate = SUPPORT;
-    //     allowed = 0;
-    //   }
-    //   else {
-    //     allowed += 1;
-    //   }
-    // }
-    motor_control(220,0);
-    if (tension >= 5){
-      //motor_control(0,0);
-      ustate = SUPPORT;
+    else if (runAvgX1 >= 35 && runAvgX2 <= 0) {  // peak is ALWAYS above 35 for X1 and below 0 for X2
+      if (allowed >= allowance) {
+        ustate = PEAK;
+        allowed = 0;
+      } else {
+        allowed += 1;
+      }
     }
+  
+  }
+
+
+  if (ustate == PEAK) {
+    Serial.println("PEAK");
+    motor_control(230,0);
+
+
+    if(pstate != ustate){
+      pstate = ustate;
+    }
+    else if (runAvgX1 <= 5 ) {
+      if (allowed >= 3*allowance) { //want at least 5 samples, but may not be feasible
+        ustate = SUPPORT;
+
+        //SEND SIGNAL TO PID TO START HERE
+
+        allowed = 0;
+      } else {
+        allowed += 1;
+      }
+    }
+
   }
 
   if (ustate == SUPPORT){
@@ -551,67 +539,58 @@ void ascend_state(){
 
     if(pstate != ustate){
       init_time1 = millis();
-      imu1_time1 = ang1_X;
-      imu2_time1 = ang2_X;
+      init_shankThighX = shankThighX;
+      imu1_time1 = angX1;
+      imu2_time1 = angX2;
       pstate = ustate;
     }
+    else{
+      if(((init_shankThighX+10) < shankThighX) || ((init_shankThighX-10) > shankThighX)){
+        init_shankThighX = shankThighX;
+        init_time1 = millis();
+      }
+      else{
+        if ((millis() - init_time1) >= 2000 ){
+          umode = IDLE;
+          idle_once = 1;
+          pstate = INVALID;
+          digitalWrite(Idle_LED,HIGH);
+          digitalWrite(Ascend_LED,LOW);
+        }
+      }
+    }
+
+
 
     PID_Update();
+    
+ 
+    if (shankThighX >= ANGLE) {  
+        if (allowed >= 5*allowance) { 
+        ustate = PRELIFT;
 
+        //SEND SIGNAL TO TURN OFF PID
 
-//    if ((abs(glob_angX1) >= 80 && abs(glob_angX1) <= 85 && abs(glob_angX2) <= 75 && abs(glob_angX2) >= 70) || (abs(gyroX_IMU2) < 8 && abs(glob_angX2) > 65)) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
-    if ((abs(glob_angX1) >= 80 && abs(glob_angX1) <= 85 && abs(glob_angX2) <= 75 && abs(glob_angX2) >= 70)) { // want to check for angles to be near 0, when it's bent it will be 20+ degrees 
-
-        if (allowed >= allowance) { 
-          ustate = PRELIFT;
-          motor_control(0,0);
-          tstart = millis();
-          allowed = 0;
-        }
-        else {
-          allowed += 1;
-        }
+        allowed = 0;
+      } else {
+        allowed += 1;
+      }
     }
-    
-    // if(millis()-init_time1 > 2000){
-    //   if(ang1_X < (imu1_time1+2) && ang2_X < (imu2_time1+2)){
-    //     motor_control(50,0);
-    //     umode = IDLE;
-    //     pstate = INVALID;
-    //     idle_once = 1;
-    //     //MODE = IDLE, set back to idle mode and make sure motor control stops
-    //   }
-    // }
-    
-    /*
-    Identifies that the leg no longer needs support.
-    Need to see that the gyro value is above some threshold above 0, which has happened in every test. Resets the system into IDLE, in case they take a break, and then from IDLE if 
-    they move their leg/are moving their leg it will trigger state to move into lift
-    */
-    //we keep supporting until we find that the value is above 10 or 15, since we will take 2 previous and divide by 2 to find an average (after the trough)
-    // if (shankThighX <= 15) { // at this point we slack the wire going to the leg to allow it to bend. cycle repeats
-    //   if (allowed >= allowance) { 
-    //     ustate = PRELIFT;
-    //     allowed = 0;
-    //   }
-    //   else {
-    //     allowed += 1;
-    //   }
-    // }
+
+
   }   
-  runAvg_prev = runAvg;
 }
 
 /****************************************************************SENSOR_TOP_LEVEL*********************************************************************/
 void sensors(){
-  currTime = millis();
+  presTime = millis();
 
-  if (currTime - lastTime >= 10){
-    if(battery_volt < -1){//battery_volt < 2
-      //estop();
+  if (presTime - lastTime >= 10){
+    if(battery_volt < 2){
+   
       Serial.print(battery_volt);
     }
-    else if(battery_volt < -1){// < 3.33
+    else if(battery_volt < 3.33){
       umode = IDLE;
       low_power = 1;
     }
@@ -620,7 +599,7 @@ void sensors(){
       I2C_IMU();
       SPI_tension();
       I2C_HE();
-      if (tension > 67){
+      if (tension > 80){
         Serial.println(tension);
         estop();
       }
@@ -633,33 +612,32 @@ void sensors(){
 /*
 Helper methods
 */
-void updateRunningAverages(float sampleX, float sampleZ){
-  
-    runAvgX -= bufferX[bufferIndex] / sampleWindow; // Remove oldest sample
-    runAvgZ -= bufferZ[bufferIndex] / sampleWindow;
+void updateRunningAverages(float sampleX1, float sampleX2) { 
 
-    // Adds next sample to buffer and updates sum
-    bufferX[bufferIndex] = sampleX;
-    bufferZ[bufferIndex] = sampleZ;
+  // Remove oldest sample
+  runAvgX1 -= bufferX1[bufferIndex] / sampleWindow;  
+  runAvgX2 -= bufferX2[bufferIndex] / sampleWindow;  
 
-    runAvgX += sampleX / sampleWindow;
-    runAvgZ += sampleZ / sampleWindow;
+  // Adds next sample to buffer and updates sum
+  bufferX1[bufferIndex] = sampleX1;
+  bufferX2[bufferIndex] = sampleX2;
 
-    // Incremenbts buffer index and wraps around
-    bufferIndex = (bufferIndex + 1) % sampleWindow;
+  runAvgX1 += sampleX1 / sampleWindow;
+  runAvgX2 += sampleX2 / sampleWindow;
+
+  // Increments buffer index and wraps around
+  bufferIndex = (bufferIndex + 1) % sampleWindow;
 }
 
 // Calculation for angles of the MPUs, to use absolute/relative angles to help determine state
 void calcAngles(float ax, float ay, float az, float gx, float gy, float& angX, float& angY) {
 
-  //float accelAngX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
-  //float accelAngY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
-  angX = atan2(ay, sqrt( pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
-  angY = atan2(ax, sqrt( pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
-  // Gyro angles, integrated
- // angX = alpha*(angX + gx*dt) + (1 - alpha)*accelAngX; //dt is global, implicit replacement of angX w/ current angX with integrated gx
- // angY = alpha*(angY + gy*dt) + (1 - alpha)*accelAngY;
+  float accelAngX = atan2(ay, sqrt(pow(ax, 2) + pow(az, 2))) * 180 / M_PI;
+  float accelAngY = atan2(ax, sqrt(pow(ay, 2) + pow(az, 2))) * 180 / M_PI;
 
+  // Gyro angles, integrated
+  angX = alpha * (angX + gx * dt) + (1 - alpha) * accelAngX;  //dt is global, implicit replacement of angX w/ current angX with integrated gx
+  angY = alpha * (angY + gy * dt) + (1 - alpha) * accelAngY;
 }
 
 void I2C_IMU(){ //basically the "loop" code
@@ -674,31 +652,32 @@ void I2C_IMU(){ //basically the "loop" code
   mpu1.getMotion6(&ax1, &ay1, &az1, &gx1, &gy1, &gz1);
   mpu2.getMotion6(&ax2, &ay2, &az2, &gx2, &gy2, &gz2);
 
+   // Converting to physical units
+  // // convert to +-8g's (converting to +-1g gave near-0 results) NOTE: THESE WERE KIND OF USELESS REGARDLESS SO I DIDN'T USE THEM AT ALL
+  // converting to degrees/s
+  float gyroX1 = gx1 / 131.0;
+  float gyroY1 = gy1 / 131.0;
+  float gyroZ1 = gz1 / 131.0;
 
-  // Converting to degrees/s
-  float gyroX1 = gx1 / 131.0; float gyroY1 = gy1 / 131.0; float gyroZ1 = gz1 / 131.0;
-  float gyroX2 = gx2 / 131.0; float gyroY2 = gy2 / 131.0; float gyroZ2 = gz2 / 131.0;
+  float gyroX2 = gx2 / 131.0;
+  float gyroY2 = gy2 / 131.0;
+  float gyroZ2 = gz2 / 131.0;
 
-  gyroX_IMU2 = gyroX2;
-  updateRunningAverages(-1*gyroX1,gyroZ1);
-  gAvgXZ = (runAvgX + runAvgZ)/2; 
-  runAvg = (gAvgXZ + runAvg_prev)/2; // Gives another "running average", taking the current calc and previous average into account (better smoothing)
-
-
+  // Update set "current value" and update running average for SHANK angular accleration
+  updateRunningAverages(gyroX1, gyroX2); //running average on previous 2 combines samples
 
   // Calculates angles of MPU w/ complementary filter
-  float angX1 = glob_angX1, angY1 = glob_angY1; // Localizing globals to be able to pass into function
-  float angX2 = glob_angX2, angY2 = glob_angY2;
+  angX1 = glob_angX1, angY1 = glob_angY1;  // Localizing globals to be able to pass into function
+  angX2 = glob_angX2, angY2 = glob_angY2;
   calcAngles(ax1, ay1, az1, gyroX1, gyroY1, angX1, angY1);
-  calcAngles(ax2, ay2, az2, gyroX2, gyroY2, angX2, angY2); 
+  calcAngles(ax2, ay2, az2, gyroX2, gyroY2, angX2, angY2);
 
-  glob_angX1 = angX1; // Sending newly calculated variables back to global
+  glob_angX1 = angX1;  // Sending newly calculated variables back to global
   glob_angY1 = angY1;
   glob_angX2 = angX2;
-  glob_angY2 = angY2; 
+  glob_angY2 = angY2;
 
-  shankThighX = abs(angX1 - angX2); // global shankThighX for use in acsend mode
-  float shankThighY = abs(angY1 - angY2);
+  shankThighX = abs(angX1 - angX2);  
 
 }
 
@@ -709,7 +688,7 @@ void SPI_tension() { // HX711 Tension Sensor reading
 }
 /****************************************************************HALL_EFFECT_SENSOR_READINGS*********************************************************************/
 void I2C_HE() {
-  static uint32_t lastTime = 0;
+  //static uint32_t lastTime = 0;
   lastAngle = spoolAngle;
   as5600.getCumulativePosition();
   spoolAngle = fmap(as5600.readAngle(), 0, 4096, 0, 360);
@@ -730,7 +709,7 @@ void I2C_HE() {
 /****************************************************************MOTOR_CONTROL_FUNCS*********************************************************************/
 void motor_control(int speed, bool direction){ //direction = 0 means ccw rotation and direction = 1 means cw rotation, speed = 0 means brake
   if(direction == 0 && lastDir != 0){
-    mc_counterclockwise();
+    mc_counterclockwise(); 
     lastDir = direction;
   }
   else if (direction == 1 && lastDir != 1){
@@ -761,11 +740,12 @@ void mc_speed(int mc_speed){ //Set speed=0 to brake
 /****************************************************************PID_FUNC*********************************************************************/
 
 void PID_Update(){
+  
   controller.Compute();
 
   (error >= 0) ? dir = 0: dir = 1;
   float errC = constrain(error, -20, 20);
-  (dir == 1) ? output = fmap(abs(errC), 0, 20, 120, 160): output = fmap(abs(errC), 0, 20, 200,255);
+  (dir == 1) ? output = fmap(abs(errC), 0, 20, 100, 140): output = fmap(abs(errC), 0, 20, 200,255);
   (tension <= 1) ? output = 255: output = output;
 
   Serial.print(millis());
@@ -778,14 +758,8 @@ void PID_Update(){
   Serial.print(",");
   Serial.println(output);
 
-  // if (dir == 1 && in == 1){
-  //   setPoint = setPoint - 10;
-  //   in = 0;
-  // }
-  // else if (dir == 0 && in == 0){
-  //   setPoint = setPoint + 10;
-  //   in = 1;
-  // }
+  
+
    if (abs(errC) < 5){
     motor_control(0,dir);
    }

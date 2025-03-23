@@ -147,11 +147,11 @@ void setup() {
 
 void loop() {
   if (digitalRead(Ascend_button)){
-    //PID_Update();
+    PID_Update();
     //SPI_tension();
     sensors();
     //Serial.println(millis());
-    Serial.println(spoolAngle);
+    //Serial.println(spoolAngle);
   }
   else{
     motor_control(200,1);
@@ -191,7 +191,7 @@ void estop(){ //User manual that says after estop device must be restarted??
 }
 
 void sensors(){
-  //SPI_tension();
+  SPI_tension();
   I2C_HE();
 }
 
@@ -252,7 +252,7 @@ void PID_Update(){
 
   (error >= 0) ? dir = 0: dir = 1;
   float errC = constrain(error, -20, 20);
-  (dir == 1) ? output = fmap(abs(errC), 0, 20, 120, 160): output = fmap(abs(errC), 0, 20, 200,255);
+  (dir == 1) ? output = fmap(abs(errC), 0, 20, 100, 140): output = fmap(abs(errC), 0, 20, 200,255);
   (tension <= 1) ? output = 255: output = output;
 
   Serial.print(millis());
