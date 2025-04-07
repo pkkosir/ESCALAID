@@ -7,25 +7,25 @@ MPU6050 mpu2(0x69);  // Second MPU6050 with address 0x69
 
 #define BAUDRATE 9600  // Defines baudrate for quick changes
 
-// // Variables to hold accelerometer and gyroscope data (tangential and angular acceleration)
-// float aX_1, aY_1, aZ_1, gX_1, gY_1, gZ_1;
-// float aX_2, aY_2, aZ_2, gX_2, gY_2, gZ_2;
+#define ANGLE 135 // Defines the angle used for threshold of PID stopping
+
 // Variables to hold the global angle data
-float glob_angX1 = 65, glob_angY1 = 0; //defaults changed to take less time to find correct angle. CHECK THESE!!!!!!!!!!!
-float glob_angX2 = -65, glob_angY2 = 0;
+float glob_angX1 = 70, glob_angY1 = 0; //defaults changed to take less time to find correct angle. CHECK THESE!!!!!!!!!!!
+float glob_angX2 = -70, glob_angY2 = 0;
 
 // Variables for the complementary filter for more accurate angle measurements
 unsigned long prevTime = 0;
 unsigned long currTime = 0;
 float dt;
-float alpha = 0.96;
+float alpha = 0.7;
 
 // For visualization purposes only
 //////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////
 void printState() {
-
+  Serial.print(100);
+  Serial.print(",");
   Serial.print(100);
   Serial.print(",");
   Serial.println(100);
@@ -58,34 +58,31 @@ const int allowance = 1;  // just 1 outlier for now, ensures that we don't preem
 int allowed = 0;
 
 // Variables and data structures for running average, taken from the average of X and Z gyroscope values (same trend, allows for initial smoothing)
-const int sampleWindow = 2;  // averages over previous 3 samples, introduces small delay
-float bufferX[sampleWindow] = { 0 };
-// float bufferZ[sampleWindow] = { 0 };
+const int sampleWindow = 2;  // averages over previous 2 samples, introduces small delay
+float bufferX1[sampleWindow] = { 0 };
+float bufferX2[sampleWindow] = { 0 };
 
-float combX = 0;
-float runAvgX = 0;  // Running average for the previous 3 values before XZ averaging
-// float runAvgZ = 0;
-
-// float gAvgXZ = 0;  // Calculated average of the X and Z gyroscope values
-float runAvg = 0;
-float runAvg_prev = 0;  // Buffer to store the previous running average for comparison
+// float combX = 0;
+float runAvgX1 = 0;  // Running average for the previous 2 values
+float runAvgX2 = 0;  // Running average for the previous 2 values
 
 int bufferIndex = 0;
 
 /*
   Helper methods
   */
-void updateRunningAverages(float sampleX) { //, float sampleZ) {
+void updateRunningAverages(float sampleX1, float sampleX2) { 
 
-  runAvgX -= bufferX[bufferIndex] / sampleWindow;  // Remove oldest sample
-  // runAvgZ -= bufferZ[bufferIndex] / sampleWindow;
+  // Remove oldest sample
+  runAvgX1 -= bufferX1[bufferIndex] / sampleWindow;  
+  runAvgX2 -= bufferX2[bufferIndex] / sampleWindow;  
 
   // Adds next sample to buffer and updates sum
-  bufferX[bufferIndex] = sampleX;
-  // bufferZ[bufferIndex] = sampleZ;
+  bufferX1[bufferIndex] = sampleX1;
+  bufferX2[bufferIndex] = sampleX2;
 
-  runAvgX += sampleX / sampleWindow;
-  // runAvgZ += sampleZ / sampleWindow;
+  runAvgX1 += sampleX1 / sampleWindow;
+  runAvgX2 += sampleX2 / sampleWindow;
 
   // Increments buffer index and wraps around
   bufferIndex = (bufferIndex + 1) % sampleWindow;
@@ -124,7 +121,7 @@ void setup() {
   Serial.println("MPU6050 initialized.");
 
   // Print CSV header to the serial monitor
-  Serial.println("RUN_AVG, RELATIVE_ANG");
+  Serial.println("X1_AVG,X2_AVG,RELATIVE_ANG");
 
 
   //Set default to state to idle, before walking has begun
@@ -150,24 +147,19 @@ void loop() {
   // Converting to physical units
 
   // // convert to +-8g's (converting to +-1g gave near-0 results) NOTE: THESE WERE KIND OF USELESS REGARDLESS SO I DIDN'T USE THEM AT ALL
-  // float accelX1 = ax1 / 4096.0; float accelY1 = ay1 / 4096.0; float accelZ1 = az1 / 4096.0;
   // converting to degrees/s
   float gyroX1 = gx1 / 131.0;
   float gyroY1 = gy1 / 131.0;
   float gyroZ1 = gz1 / 131.0;
 
-  // float accelX2 = ax2 / 4096.0; float accelY2 = ay2 / 4096.0; float accelZ2 = az2 / 4096.0;
   float gyroX2 = gx2 / 131.0;
   float gyroY2 = gy2 / 131.0;
   float gyroZ2 = gz2 / 131.0;
 
   // Update set "current value" and update running average for SHANK angular accleration
-  combX = (gyroX1 + gyroX2)/2; //reduces subtractive noise
-  updateRunningAverages(combX); //running average on previous 2 combines samples
-  runAvg = runAvgX; //we don't need more smoothing than we already do
-
-  // gAvgXZ = (runAvgX + runAvgZ) / 2;
-  // runAvg = (runAvgX + runAvg_prev) / 2;  // Gives another "running average", taking the current calc and previous average into account (better smoothing)
+  // combX = (gyroX1 + gyroX2)/2; //reduces subtractive noise
+  updateRunningAverages(gyroX1, gyroX2); //running average on previous 2 combines samples
+  // runAvg = runAvgX; //we don't need more smoothing than we already do
 
   // Calculates angles of MPU w/ complementary filter
   float angX1 = glob_angX1, angY1 = glob_angY1;  // Localizing globals to be able to pass into function
@@ -180,10 +172,7 @@ void loop() {
   glob_angX2 = angX2;
   glob_angY2 = angY2;
 
-  /////////////// TESTING AREA FOR ANGLES ///////////////
   float shankThighX = abs(angX1 - angX2);  // CONSISTENTLY BETWEEN 115 AND 170. STRAIGHT LEG IS ~140-160. SHOULD DO MANY SAMPLES READING ABOVE 140 TO BE SAFE
-  // float shankThighY = abs(angY1 - angY2);
-  ///////////////////////////////////////////////////////
 
   // Identifies when to swap to next state
   if (state == IDLE) {
@@ -193,7 +182,7 @@ void loop() {
       is above some threshold to ensure we don't switch states just due to noisy sensor data
       */
     
-    if (runAvg <= -25) { //trough ALWAYS below -25
+    if (runAvgX1 <= -40 || runAvgX2 <= -40) { //trough ALWAYS below -40
       if (allowed >= allowance) {
         state = TROUGH; //moves to when data will look like a trough, needed to differentiate next state
         if (TOPRINT) printState();
@@ -204,12 +193,12 @@ void loop() {
     }
   }
 
-  if (state == TROUGH) {  //
+  if (state == TROUGH) {
     /*
       Identifies that the leg is about to make contact with the ground.
       Need to know when we go above a certain acceleration value, which happens when we swap directions
       */
-    if (runAvg >= 35) {  // peak is ALWAYS above 35
+    if (runAvgX1 >= 35 && runAvgX2 <= 0) {  // peak is ALWAYS above 35 for X1 and below 0 for X2
       if (allowed >= allowance) {
         state = PEAK;
         if (TOPRINT) printState();
@@ -220,13 +209,15 @@ void loop() {
     }
   }
 
+
+  // CONCERNS: THE WAY THAT RYAN IS WALKING MAY NOT ALLOW FOR US TO REALLY DISTINGUISH WHEN HE NEEDS SUPPORT. HE MAY NEED TO SLOW DOWN SO THAT WE CAN GET BETTER READINGS FOR THE DEMO
   if (state == PEAK) {
     /*
       Identifies when the leg actually makes CONTACT with the ground.
       This will be identified by the movement of the leg being ~0
       */
-    if (-5 <= runAvg <=5 ) {
-      if (allowed >= 20*allowance) { //want at least 5 samples, but saw 20 was better for the speed at which I was moving
+    if (runAvgX1 <= 5 ) {
+      if (allowed >= 3*allowance) { //want at least 5 samples, but may not be feasible
         state = SUPPORT;
 
         //SEND SIGNAL TO PID TO START HERE
@@ -242,11 +233,11 @@ void loop() {
   if (state == SUPPORT) {
     /*
       Identifies that the leg no longer needs support.
-      Need to see that the angle is above some threshold (140), which has happened in every test. Resets the system into IDLE, in case they take a break, and then from IDLE if 
+      Need to see that the angle is above some threshold (120), which has happened in every test. Resets the system into IDLE, in case they take a break, and then from IDLE if 
       they move their leg/are moving their leg it will trigger state to move into lift
       */
-    if (shankThighX >= 150) {  // straight leg is anything above ~150 degrees
-        if (allowed >= 10*allowance) { //allows for some delay (aka straight leg) before turning off support. This should account for a few outlier readings above 150, to ensure that the leg is truly straight before releasing support 
+    if (shankThighX >= ANGLE) {  // straight leg is anything above ~120 degrees (for Ryan's leg)
+        if (allowed >= 5*allowance) { //allows for some delay (aka straight leg) before turning off support. This should account for a few outlier readings above 120, to ensure that the leg is truly straight before releasing support 
         state = IDLE;
 
         //SEND SIGNAL TO TURN OFF PID
@@ -259,22 +250,18 @@ void loop() {
     }
   }
 
-  runAvg_prev = runAvg;
+  // runAvg_prev = runAvg;
+
+
   // Send data to the serial monitor for logging
   if ((counter % count) == 0) {  // prints every count-th sample only
     // Serial.print(gyroX1);
     // Serial.print(",");
     // Serial.print(gyroX2);
     // Serial.print(",");
-    // Serial.print(gyroY1);
-    // Serial.print(",");
-    // Serial.print(gyroY2);
-    // Serial.print(",");
-    // Serial.print(gyroZ1);
-    // Serial.print(",");
-    // Serial.print(gyroZ2);
-    // Serial.print(",");
-    Serial.print(runAvg);
+    Serial.print(runAvgX1);
+    Serial.print(",");
+    Serial.print(runAvgX2);
     Serial.print(",");
     // Serial.print(angX2);
     // Serial.print(",");
