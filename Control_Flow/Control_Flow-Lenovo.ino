@@ -218,7 +218,7 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
 }
 
 void PID_init(){
-  setPoint = 60;
+  setPoint = 50;
   controller.SetSampleTime(25);
   controller.SetOutputLimits(-255, 255);
   controller.SetMode(AUTOMATIC);
@@ -350,6 +350,9 @@ void loop() {
 
 /****************************************************************BUTTON_MODE_FUNC*********************************************************************/
 void mode_selection(){
+      Serial.print(shankThighX);
+    Serial.print(",");
+    Serial.println(tension);
    //IDLE MODE BUTTON PRESS
   if(digitalRead(Idle_button) == LOW && umode != IDLE && active == 1){
     if(tension<3 && shankThighX >= 120){ //check for straight leg and no load
@@ -361,7 +364,11 @@ void mode_selection(){
     }   
   } 
   //ASCEND MODE BUTTON PRESS
-  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1 && low_power == 0){
+  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1 && low_power == 0){//low power == 1?
+
+    Serial.print(shankThighX);
+    Serial.print(",");
+    Serial.println(tension);
     if(tension<3 && shankThighX >= 120){ //check for straight leg and no load
       umode = ASCEND;
       //Set default to state to idle, before walking has begun
@@ -508,22 +515,28 @@ void ascend_state(){
   if (ustate == PEAK) {
     Serial.println("PEAK");
     motor_control(230,0);
+
+
     if(pstate != ustate){
       pstate = ustate;
     }
     else if (runAvgX1 <= 5 ) {
       if (allowed >= 3*allowance) { //want at least 5 samples, but may not be feasible
         ustate = SUPPORT;
+
         //SEND SIGNAL TO PID TO START HERE
+
         allowed = 0;
       } else {
         allowed += 1;
       }
     }
+
   }
 
   if (ustate == SUPPORT){
     Serial.println("SUPPORT");
+
     if(pstate != ustate){
       init_time1 = millis();
       init_shankThighX = shankThighX;
@@ -531,24 +544,10 @@ void ascend_state(){
       imu2_time1 = angX2;
       pstate = ustate;
     }
-    else{
-      if(((init_shankThighX+10) < shankThighX) || ((init_shankThighX-10) > shankThighX)){
-        init_shankThighX = shankThighX;
-        init_time1 = millis();
-      }
-      else{
-        if ((millis() - init_time1) >= 2000 ){
-          umode = IDLE;
-          idle_once = 1;
-          pstate = INVALID;
-          digitalWrite(Idle_LED,HIGH);
-          digitalWrite(Ascend_LED,LOW);
-        }
-      }
-    }
 
     PID_Update();
-  
+    
+ 
     if (shankThighX >= ANGLE) {  
         if (allowed >= 5*allowance) { 
         ustate = PRELIFT;
@@ -571,7 +570,8 @@ void sensors(){
 
   if (presTime - lastTime >= 10){
     if(battery_volt < 2){
-      estop();
+   
+      Serial.print(battery_volt);
     }
     else if(battery_volt < 3.33){
       umode = IDLE;
@@ -742,6 +742,24 @@ void PID_Update(){
   Serial.println(output);
 
   
+  if ((millis() - init_time1) >= 2000 ){
+    Serial.println("here");
+    
+    if(((init_shankThighX+10) > shankThighX) && ((init_shankThighX-10) < shankThighX)){
+
+    }
+    else{
+      umode = IDLE;
+      idle_once = 1;
+      pstate = INVALID;
+      digitalWrite(Idle_LED,HIGH);
+      digitalWrite(Ascend_LED,LOW);
+    }
+    init_shankThighX = shankThighX;
+    init_time1 = millis();
+
+  }
+
 
    if (abs(errC) < 5){
     motor_control(0,dir);

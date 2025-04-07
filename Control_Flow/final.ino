@@ -53,7 +53,7 @@ const int mc_PWM = 4;
 MPU6050 mpu1;
 MPU6050 mpu2(0x69); // Second MPU6050 with address 0x69
 
-#define ANGLE 135 // Defines the angle used for threshold of PID stopping
+#define ANGLE 145 // Defines the angle used for threshold of PID stopping
 
 // Variables to hold the global angle data
 float glob_angX1 = 65, glob_angY1 = 0; //defaults changed to take less time to find correct angle. CHECK THESE!!!!!!!!!!!
@@ -218,7 +218,7 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
 }
 
 void PID_init(){
-  setPoint = 60;
+  setPoint = 50;
   controller.SetSampleTime(25);
   controller.SetOutputLimits(-255, 255);
   controller.SetMode(AUTOMATIC);
@@ -255,11 +255,14 @@ void pin_init() {
   attachInterrupt(digitalPinToInterrupt(Idle_button),mode_selection,FALLING);
   pinMode(estop_button, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(estop_button),estopFlag,FALLING);
+  pinMode(Descend_button, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(Descend_button),mode_selection,FALLING);
 
   //initialize LEDs
   pinMode(Active_LED, OUTPUT);
   pinMode(Idle_LED, OUTPUT );
   pinMode(Ascend_LED, OUTPUT);
+  pinMode(Descend_LED, OUTPUT);
 }
 
 void calibrate(){
@@ -294,7 +297,7 @@ void calibrate(){
   prevTime = millis();
   umode = IDLE;
 
-  battery_volt = fmap(analogRead(A9),0,1023,0,5.2);
+  //battery_volt = fmap(analogRead(A9),0,1023,0,5.2);
   Serial.println("CAL_DONE");
   delay(100);
 
@@ -320,7 +323,14 @@ void setup() {
 
 /****************************************************************LOOP_FUNC*********************************************************************/
 void loop() {
-  
+  // Serial.print(runAvgX1);
+  // Serial.print(",");
+  // Serial.print(glob_angX1);
+  // Serial.print(",");
+  // Serial.print(glob_angX2);
+  // Serial.print(",");
+  // Serial.println(shankThighX);
+  Serial.println(umode);
   //calibrate once everytime we are active
   if(cal == 1 && active == 1){
     calibrate();
@@ -350,18 +360,24 @@ void loop() {
 
 /****************************************************************BUTTON_MODE_FUNC*********************************************************************/
 void mode_selection(){
+    // Serial.print(shankThighX);
+    // Serial.print(",");
+    // Serial.println(tension);
    //IDLE MODE BUTTON PRESS
-  if(digitalRead(Idle_button) == LOW && umode != IDLE && active == 1){
+  if(digitalRead(Idle_button) == LOW && umode != IDLE && active == 1 && umode != DESCEND){
     if(tension<3 && shankThighX >= 120){ //check for straight leg and no load
       umode = IDLE;
       idle_once = 1;
       pstate = INVALID;
       digitalWrite(Idle_LED,HIGH);
       digitalWrite(Ascend_LED,LOW);
+      digitalWrite(Descend_LED,LOW);
     }   
   } 
   //ASCEND MODE BUTTON PRESS
-  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1 && low_power == 0){
+  if(digitalRead(Ascend_button) == LOW && umode != ASCEND && active == 1 && low_power == 0 && umode != DESCEND){//low power == 1?
+
+    //Serial.print("ASCEND");
     if(tension<3 && shankThighX >= 120){ //check for straight leg and no load
       umode = ASCEND;
       //Set default to state to idle, before walking has begun
@@ -369,9 +385,33 @@ void mode_selection(){
       pstate = INVALID;
       digitalWrite(Ascend_LED,HIGH);
       digitalWrite(Idle_LED,LOW);
+      digitalWrite(Descend_LED,LOW);
       first_step = 1;
     }
+  }
+
+  if(digitalRead(Descend_button) == LOW && umode != DESCEND){
+    //Serial.println("descend");
+    umode = DESCEND;
+    ustate = INVALID;
+    pstate = INVALID;
+    digitalWrite(Descend_LED,HIGH);
+    digitalWrite(Ascend_LED, LOW);
+    digitalWrite(Idle_LED, LOW);
+    //delay(1000);
   } 
+
+  // if(digitalRead(Descend_button) == LOW && umode == DESCEND){
+  //   //Serial.println("out");
+  //   umode = IDLE;
+  //   ustate = INVALID;
+  //   pstate = INVALID;
+  //   motor_control(0,0);
+  //   digitalWrite(Descend_LED, LOW);
+  //   digitalWrite(Ascend_LED, LOW);
+  //   digitalWrite(Idle_LED, HIGH);
+  //   delay(1000);
+  // }
 }
 
 void estopFlag(){
@@ -399,6 +439,7 @@ void estop(){
       digitalWrite(Ascend_LED,LOW);
       digitalWrite(Idle_LED,LOW);
       digitalWrite(Active_LED,LOW);
+      delay(200);
   }
 }
 
@@ -406,6 +447,7 @@ void activate(){
     if (active == 0){//User turns on device
       active = 1;
       digitalWrite(Ascend_LED,LOW);
+      digitalWrite(Descend_LED,LOW);
       digitalWrite(Idle_LED,HIGH);
       digitalWrite(Active_LED,HIGH);
       umode = IDLE;
@@ -418,6 +460,7 @@ void activate(){
         digitalWrite(Active_LED,LOW);
         digitalWrite(Ascend_LED,LOW);
         digitalWrite(Idle_LED,LOW);
+        digitalWrite(Descend_LED,LOW);
       }
     } 
 }
@@ -426,14 +469,17 @@ void activate(){
 void state_detection(){
   if(umode == IDLE){
     idle_state();
+    //interrupts();
   }
 
   else if (umode == ASCEND){
     ascend_state();
+    //interrupts();
   }
 
-  else{
-
+  else if (umode == DESCEND){
+    descend_state();
+    //noInterrupts();
   }
 }
 /****************************************************************IDLE_STATE_FUNC*********************************************************************/
@@ -449,6 +495,18 @@ void idle_state(){
     motor_control(0,0);
     idle_once = 0;
     }
+  }
+}
+/****************************************************************DESCEND_STATE_FUNC*********************************************************************/
+void descend_state(){
+  if(!digitalRead(Ascend_button)){
+    motor_control(255,1);
+  }
+  else if(!digitalRead(Idle_button)){
+    motor_control(255,0);
+  }
+  else{
+    motor_control(0,0);
   }
 }
 /****************************************************************ASCEND_STATE_FUNC*********************************************************************/
@@ -508,22 +566,28 @@ void ascend_state(){
   if (ustate == PEAK) {
     Serial.println("PEAK");
     motor_control(230,0);
+
+
     if(pstate != ustate){
       pstate = ustate;
     }
-    else if (runAvgX1 <= 5 ) {
+    else if (runAvgX1 <= 10 ) {
       if (allowed >= 3*allowance) { //want at least 5 samples, but may not be feasible
         ustate = SUPPORT;
+
         //SEND SIGNAL TO PID TO START HERE
+
         allowed = 0;
       } else {
         allowed += 1;
       }
     }
+
   }
 
   if (ustate == SUPPORT){
     Serial.println("SUPPORT");
+
     if(pstate != ustate){
       init_time1 = millis();
       init_shankThighX = shankThighX;
@@ -531,24 +595,27 @@ void ascend_state(){
       imu2_time1 = angX2;
       pstate = ustate;
     }
-    else{
-      if(((init_shankThighX+10) < shankThighX) || ((init_shankThighX-10) > shankThighX)){
-        init_shankThighX = shankThighX;
-        init_time1 = millis();
-      }
-      else{
-        if ((millis() - init_time1) >= 2000 ){
-          umode = IDLE;
-          idle_once = 1;
-          pstate = INVALID;
-          digitalWrite(Idle_LED,HIGH);
-          digitalWrite(Ascend_LED,LOW);
-        }
-      }
-    }
+    //else{
+      // if(((init_shankThighX+10) < shankThighX) || ((init_shankThighX-10) > shankThighX)){
+      //   init_shankThighX = shankThighX;
+      //   init_time1 = millis();
+      // }
+      // else{
+      //   if ((millis() - init_time1) >= 2000 ){
+      //     umode = IDLE;
+      //     idle_once = 1;
+      //     pstate = INVALID;
+      //     digitalWrite(Idle_LED,HIGH);
+      //     digitalWrite(Ascend_LED,LOW);
+      //   }
+      //}
+    //}
+
+
 
     PID_Update();
-  
+    
+ 
     if (shankThighX >= ANGLE) {  
         if (allowed >= 5*allowance) { 
         ustate = PRELIFT;
@@ -570,22 +637,23 @@ void sensors(){
   presTime = millis();
 
   if (presTime - lastTime >= 10){
-    if(battery_volt < 2){
-      estop();
+    if(battery_volt < -1){ //2
+   
+      Serial.print(battery_volt);
     }
-    else if(battery_volt < 3.33){
+    else if(battery_volt < -1){ //3.33
       umode = IDLE;
       low_power = 1;
     }
     else{
-      battery_volt = fmap(analogRead(A9),0,1023,0,5.2); 
+      //battery_volt = fmap(analogRead(A9),0,1023,0,5.2); 
       I2C_IMU();
       SPI_tension();
       I2C_HE();
-      if (tension > 80){
-        Serial.println(tension);
-        estop();
-      }
+      // if (tension > 80){
+      //   Serial.println(tension);
+      //   estop();
+      // }
     }
 
   }
